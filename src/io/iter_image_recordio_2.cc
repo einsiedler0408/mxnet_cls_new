@@ -139,7 +139,7 @@ inline void ImageRecordIOParser2<DType>::Init(
   #pragma omp parallel
   {
     // be conservative, set number of real cores
-    maxthread = std::max(omp_get_num_procs() / 2 - 1, 1);
+    maxthread = std::max(omp_get_num_procs() - 2, 1);
   }
   param_.preprocess_threads = std::min(maxthread, param_.preprocess_threads);
   #pragma omp parallel num_threads(param_.preprocess_threads)
@@ -393,13 +393,28 @@ void ImageRecordIOParser2<DType>::ProcessImage(const cv::Mat& res,
     swap_indices[3] = 3;
   }
 
+  const float *im_data_f;
+  const uchar *im_data_u;
   DType RGBA[n_channels] = {};
   for (int i = 0; i < res.rows; ++i) {
-    const uchar* im_data = res.ptr<uchar>(i);
+    if (CV_32F == res.depth()){
+      im_data_f = res.ptr<float>(i);
+    }
+    else{
+      im_data_u = res.ptr<uchar>(i);
+    }
+    //const uchar* im_data = res.ptr<uchar>(i);
     for (int j = 0; j < res.cols; ++j) {
-      for (int k = 0; k < n_channels; ++k) {
-        RGBA[k] = im_data[swap_indices[k]];
+      if (CV_32F == res.depth()){
+        for (int k = 0; k < n_channels; ++k) {
+          RGBA[k] = im_data_f[swap_indices[k]];
+        }
       }
+      else{
+        for (int k = 0; k < n_channels; ++k) {
+          RGBA[k] = im_data_u[swap_indices[k]];
+        }
+      } 
       if (!std::is_same<DType, uint8_t>::value) {
         // normalize/mirror here to avoid memory copies
         // logic from iter_normalize.h, function SetOutImg
@@ -420,7 +435,12 @@ void ImageRecordIOParser2<DType>::ProcessImage(const cv::Mat& res,
           data[k][i][j] = RGBA[k];
         }
       }
-      im_data += n_channels;
+      if (CV_32F == res.depth()){
+        im_data_f += n_channels;
+      }
+      else{
+        im_data_u += n_channels;
+      }
     }
   }
 }
