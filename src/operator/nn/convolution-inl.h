@@ -65,6 +65,7 @@ struct ConvolutionParam : public dmlc::Parameter<ConvolutionParam> {
   bool no_bias;
   dmlc::optional<int> cudnn_tune;
   bool cudnn_off;
+  int method;
   dmlc::optional<int> layout;
   DMLC_DECLARE_PARAMETER(ConvolutionParam) {
     DMLC_DECLARE_FIELD(kernel).describe("Convolution kernel size: (w,), (h, w) or (d, h, w)");
@@ -90,6 +91,8 @@ struct ConvolutionParam : public dmlc::Parameter<ConvolutionParam> {
         .describe("Whether to pick convolution algo by running performance test.");
     DMLC_DECLARE_FIELD(cudnn_off).set_default(false)
     .describe("Turn off cudnn for this layer.");
+    DMLC_DECLARE_FIELD(method).set_default(1)
+    .describe("0: regular conv; 1: depthwise optimized");
     DMLC_DECLARE_FIELD(layout)
     .add_enum("NCW", mshadow::kNCW)
     .add_enum("NCHW", mshadow::kNCHW)

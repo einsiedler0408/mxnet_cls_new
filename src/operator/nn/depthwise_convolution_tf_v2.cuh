@@ -24,57 +24,19 @@
  *        are different with origin version.
  * \author shuqian.qu@hobot.cc
 */
-#ifndef MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_CUH_
-#define MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_CUH_
+#ifndef MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_V2_CUH_
+#define MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_V2_CUH_
 #include "../../common/cuda_utils.h"
 #include "../mxnet_op.h"
+#include "depthwise_convolution_tf.cuh"
 
 namespace tf {
 namespace depthwise_conv {
 
-#define FULL_WARP_MASK 0xFFFFFFFF
-#if CUDA_VERSION < 9000
-template<typename DType>
-__forceinline__ __device__ DType  __shfl_xor_sync(unsigned, DType val, int delta) {
-  return __shfl_xor(val, delta);
-}
-
-template<typename DType>
-__forceinline__ __device__ DType  __shfl_down_sync(unsigned, DType val, int delta) {
-  return __shfl_down(val, delta);
-}
-
-// shuffle masks not used before CUDA 9.
-#define CREATE_SHFL_MASK(mask, predicate) \
-    unsigned mask = 0u;
-#else
-#define CREATE_SHFL_MASK(mask, predicate) \
-    unsigned mask = __ballot_sync(FULL_WARP_MASK, (predicate))
-#endif
-
-struct DepthwiseArgs {
-  // Input layer dimensions
-  int batch;
-  int in_height;
-  int in_width;
-  int in_channel;
-  int filter_height;
-  int filter_width;
-  int stride_height;
-  int stride_width;
-  int pad_height;
-  int pad_width;
-
-  // Output layer dimensions
-  int out_height;
-  int out_width;
-  int out_channel;
-};
-
 namespace cuda {
 template<typename DType, int kFilterHeight, int kFilterWidth>
 __global__ void __launch_bounds__(1024, 2)
-DepthwiseConv2dForwardKernel(const DType* input,
+DepthwiseConv2dV2ForwardKernel(const DType* input,
                              const DType* filter,
                              const DepthwiseArgs args,
                              int num_outputs,
@@ -91,6 +53,7 @@ DepthwiseConv2dForwardKernel(const DType* input,
   const int out_channel = args.out_channel;
   const int out_height = args.out_height;
   const int out_width = args.out_width;
+  const int multiplier = args.out_channel / args.in_channel;
 
   CUDA_KERNEL_LOOP(thread_id, num_outputs) {
     // Compute the indexes of this thread in the output.
@@ -104,7 +67,7 @@ DepthwiseConv2dForwardKernel(const DType* input,
     const int out_h = (thread_id / out_width) % out_height;
     const int out_c = (thread_id / out_width / out_height) % out_channel;
     const int out_b = thread_id / out_width / out_height / out_channel;
-    const int in_c = out_c;
+    const int in_c = out_c / multiplier;
 
     // Data is stored in the following format (let's assume we
     // flatten the height and width into one contiguous dimension
@@ -131,7 +94,7 @@ DepthwiseConv2dForwardKernel(const DType* input,
     //
     // We can compute the index into the patch once right here.
     const int input_offset_temp = (out_b * in_channel + in_c) * (in_height * in_width);
-    const int filter_offset_temp = in_c * filter_height * filter_width;
+    const int filter_offset_temp = out_c * filter_height * filter_width;
 
     // Finally, we can iterate over the spatial dimensions and perform the
     // convolution, writing into the output at the end.
@@ -182,7 +145,8 @@ DepthwiseConv2dForwardKernel(const DType* input,
 
 // The DepthwiseConv2dKernelSmall perform either forward or backward input
 // convolution depending on a template argument of this enum.
-enum DepthwiseConv2dDirection { DIRECTION_FORWARD, DIRECTION_BACKWARD };
+//enum DepthwiseConv2dDirection { DIRECTION_FORWARD, DIRECTION_BACKWARD };
+//enum DepthwiseConv2dMultiplier { MULTIPLIER_GREATER, MULTIPLIER_LESS };
 
 // CUDA kernel to compute the depthwise convolution forward pass in NCHW format,
 // tailored for small images up to 32x32. Only use this kernel if
@@ -194,7 +158,7 @@ enum DepthwiseConv2dDirection { DIRECTION_FORWARD, DIRECTION_BACKWARD };
 // rotated by 180°.
 template <typename DType, DepthwiseConv2dDirection kDirection,
           int kBlockSlices, bool kEvenHeight, int kFilterHeight, int kFilterWidth>
-__global__ __launch_bounds__(1024, 2) void DepthwiseConv2dKernelSmall(
+__global__ __launch_bounds__(1024, 2) void DepthwiseConv2dV2KernelSmall(
     const DepthwiseArgs args, const DType* input, const DType* filter, DType* output) {
   extern __shared__ __align__(sizeof(DType)) unsigned char shared_memory[];
   DType* const shared_data = reinterpret_cast<DType*>(shared_memory);
@@ -206,6 +170,18 @@ __global__ __launch_bounds__(1024, 2) void DepthwiseConv2dKernelSmall(
   const int filter_width = kFilterWidth > 0 ? kFilterWidth : args.filter_width;
   const int pad_height = args.pad_height;
   const int pad_width = args.pad_width;
+  const int out_channel = args.out_channel;
+
+
+  const int channel = args.out_channel < args.in_channel ? args.out_channel : args.in_channel;
+
+  const int multiplier = args.out_channel < args.in_channel ? args.in_channel / args.out_channel : args.out_channel / args.in_channel;
+
+
+
+
+  //const int channel = kMultiplier == MULTIPLIER_GREATER ? args.in_channel : args.out_channel; 
+  //const int multiplier = kMultiplier == MULTIPLIER_GREATER ? args.out_channel / args.in_channel : args.in_channel / args.out_channel;
 
   // Fixed blockDim.z, tailored for maximum grid size for images of size 16x16.
   const int block_height = blockDim.y;
@@ -224,7 +200,7 @@ __global__ __launch_bounds__(1024, 2) void DepthwiseConv2dKernelSmall(
   const int tile_size = tile_pixels * kBlockSlices;
   const int tile_offset = block_height * tile_width;
   const int pad_offset = pad_height * tile_width + pad_width;
-  const int in_slices = in_channel * args.batch;
+  const int in_slices = channel * args.batch;
   const int in_blocks = (in_slices + kBlockSlices - 1) / kBlockSlices;
 
   const int thread_width = threadIdx.x;
@@ -234,12 +210,8 @@ __global__ __launch_bounds__(1024, 2) void DepthwiseConv2dKernelSmall(
   // Position in block.
   const int thread_pix = thread_height * in_width + thread_width;
   const int thread_idx = thread_channel * block_pixels + thread_pix;
-
-  // Initialize tile, in particular the padding.
-  for (int i = thread_idx; i < tile_size; i += block_size) {
-    shared_data[i] = DType(0);
-  }
-  __syncthreads();
+  
+  const int filter_size = filter_pixels * multiplier * kBlockSlices;
 
   // Position in tensors.
   const int tensor_idx = thread_channel * in_pixels + thread_pix;
@@ -251,83 +223,175 @@ __global__ __launch_bounds__(1024, 2) void DepthwiseConv2dKernelSmall(
   // Position in shared memory, offset by pad_height / pad_width.
   const int tile_idx = data_idx + pad_offset;
 
-  const int filter_pix = thread_pix;
-  const int filter_channel = thread_channel;
-  const int filter_idx = filter_pixels * filter_channel + filter_pix;
+  const int filter_idx = thread_idx;
+
+  //const int filter_pix = thread_pix;
+  //const int filter_channel = thread_channel * multiplier;
+  //const int filter_idx = filter_pixels * filter_channel + filter_pix;
 
   const int max_slice = in_slices - thread_channel;
-  const int filter_write_offset = filter_pix < filter_pixels ? tile_size + filter_idx : 0;
-  const int filter_read_offset = tile_size +
-    (kDirection == DIRECTION_FORWARD ?
-     filter_pixels * filter_channel : filter_pixels * (filter_channel + 1));
+  //const int filter_write_offset = filter_pix < filter_pixels ? tile_size + filter_idx : 0;
   const bool skip_second = !kEvenHeight && thread_height + (in_height & 1) == block_height;
 
   for (int b = blockIdx.x; b < in_blocks; b += gridDim.x) {
     const int slice = b * kBlockSlices;
-
-    const int inout_offset = slice * in_pixels + tensor_idx;
     const bool slice_in_range = slice < max_slice;
 
-    if (slice_in_range) {
-      const DType* const in_ptr = inout_offset + input;
-      DType* const tile_ptr = tile_idx + shared_data;
-      tile_ptr[0] = ldg(in_ptr);
-      if (!skip_second) {
-        tile_ptr[tile_offset] = ldg(block_pixels + in_ptr);
+    const int slice_filter = slice % channel;
+
+    for (int tt = 0; tt < filter_size; tt += block_size){
+      if (tt + filter_idx < filter_size){
+        shared_data[tile_size + tt + filter_idx] = ldg(tt + filter_idx + slice_filter * multiplier * filter_pixels + filter);
       }
     }
+    if ((args.in_channel <= args.out_channel && kDirection == DIRECTION_FORWARD) || (args.in_channel >= args.out_channel && kDirection == DIRECTION_BACKWARD)){
+      const int in_offset = slice * in_pixels + tensor_idx;
 
-    if (filter_write_offset != 0) {
-      const int filter_offset = ((slice + filter_channel) % in_channel)* filter_pixels + filter_pix;
-      shared_data[filter_write_offset] = ldg(filter_offset + filter);
+      // Initialize tile, in particular the padding.
+      for (int i = thread_idx; i < tile_size; i += block_size) {
+        shared_data[i] = DType(0);
+      }
+      __syncthreads();
+
+      if (slice_in_range) {
+
+        const DType* const in_ptr = in_offset + input;
+        DType* const tile_ptr = tile_idx + shared_data;
+        tile_ptr[0] = ldg(in_ptr);
+        if (!skip_second) {
+          tile_ptr[tile_offset] = ldg(block_pixels + in_ptr);
+        }
+      }
+
+      // Note: the condition to reach this is uniform across the entire block.
+      __syncthreads();
+
+      if (slice_in_range) {
+        CUDA_UNROLL for (int m = 0; m < multiplier; ++m){
+          const int filter_read_offset = tile_size +
+            (kDirection == DIRECTION_FORWARD ?
+            filter_pixels * (thread_channel * multiplier + m) : filter_pixels * (thread_channel * multiplier + m + 1));
+	  const int out_offset = ((slice+thread_channel) * multiplier + m) * in_pixels + thread_pix;
+          DType sum1 = 0;
+          DType sum2 = 0;
+          int shared_offset = data_idx;
+          const DType* filter_ptr = filter_read_offset + shared_data;
+          CUDA_UNROLL for (int r = 0; r < filter_height; ++r) {
+            CUDA_UNROLL for (int c = 0; c < filter_width; ++c) {
+              if (kDirection == DIRECTION_BACKWARD) {
+                filter_ptr--;
+              }
+              const DType filter_value = *filter_ptr;
+              const DType* const tile_ptr = shared_offset + shared_data;
+              sum1 += filter_value * tile_ptr[0];
+              sum2 += filter_value * tile_ptr[tile_offset];
+              ++shared_offset;
+              if (kDirection == DIRECTION_FORWARD) {
+                filter_ptr++;
+              }
+            }
+            shared_offset += in_increment;
+          }
+          DType* const out_ptr = out_offset + output;
+          if (kDirection == DIRECTION_FORWARD) {
+            out_ptr[0] = sum1;
+            if (!skip_second) {
+              out_ptr[block_pixels] = sum2;
+            }
+          } else {
+            out_ptr[0] += sum1;
+            if (!skip_second) {
+              out_ptr[block_pixels] += sum2;
+            }
+          }
+	  //if (0 == m){
+          //printf("multiplier=%d, block_pixels=%d, block_size=%d, in_pixels=%d, in_increment=%d, filter_pixels=%d, tile_width=%d, in_slices=%d, in_blocks=%d, thread_width=%d, thread_height=%d, thread_channel=%d, thread_pix=%d, thread_idx=%d, filter_size=%d, tensor_idx=%d, data_pix=%d, data_idx=%d, tile_idx=%d, filter_idx=%d, max_slice=%d\nm=%d, sum1=%.2f, sum2=%.2f, out_offset=%d, filter_read_offset=%d, shared_offset=%d, tile_size=%d, tile_height=%d, tile_pixels=%d, kBlockSlices=%d\n", multiplier, block_pixels, block_size, in_pixels, in_increment, filter_pixels, tile_width, in_slices, in_blocks, thread_width, thread_height, thread_channel, thread_pix, thread_idx, filter_size, tensor_idx, data_pix, data_idx, tile_idx, filter_idx, max_slice, m, sum1, sum2, out_offset, filter_read_offset, shared_offset, tile_size, tile_height, tile_pixels, kBlockSlices);
+          //}
+          // Note: the condition to reach this is uniform across the entire block.
+          __syncthreads();
+        }
+      }
     }
-
-    // Note: the condition to reach this is uniform across the entire block.
-    __syncthreads();
-
-    if (slice_in_range) {
+    else {
+      const int out_offset = slice * in_pixels + tensor_idx;
       DType sum1 = 0;
       DType sum2 = 0;
-      int shared_offset = data_idx;
-      const DType* filter_ptr = filter_read_offset + shared_data;
-      CUDA_UNROLL for (int r = 0; r < filter_height; ++r) {
-        CUDA_UNROLL for (int c = 0; c < filter_width; ++c) {
-          if (kDirection == DIRECTION_BACKWARD) {
-            filter_ptr--;
-          }
-          const DType filter_value = *filter_ptr;
-          const DType* const tile_ptr = shared_offset + shared_data;
-          sum1 += filter_value * tile_ptr[0];
-          sum2 += filter_value * tile_ptr[tile_offset];
-          ++shared_offset;
-          if (kDirection == DIRECTION_FORWARD) {
-            filter_ptr++;
-          }
-        }
-        shared_offset += in_increment;
-      }
-      DType* const out_ptr = inout_offset + output;
-      if (kDirection == DIRECTION_FORWARD) {
-        out_ptr[0] = sum1;
-        if (!skip_second) {
-          out_ptr[block_pixels] = sum2;
-        }
-      } else {
-        out_ptr[0] += sum1;
-        if (!skip_second) {
-          out_ptr[block_pixels] += sum2;
-        }
-      }
-    }
 
-    // Note: the condition to reach this is uniform across the entire block.
-    __syncthreads();
+      CUDA_UNROLL for (int m = 0; m < multiplier; ++m){
+	const int in_offset = ((slice+thread_channel) * multiplier + m) * in_pixels + thread_pix;
+        //const int in_offset = (slice * multiplier + m) * in_pixels + tensor_idx;
+
+        // Initialize tile, in particular the padding.
+        for (int i = thread_idx; i < tile_size; i += block_size) {
+          shared_data[i] = DType(0);
+        }
+        __syncthreads();
+
+        if (slice_in_range) {
+
+          const DType* const in_ptr = in_offset + input;
+          DType* const tile_ptr = tile_idx + shared_data;
+          tile_ptr[0] = ldg(in_ptr);
+          if (!skip_second) {
+            tile_ptr[tile_offset] = ldg(block_pixels + in_ptr);
+          }
+	}
+
+        // Note: the condition to reach this is uniform across the entire block.
+        __syncthreads();
+
+        if (slice_in_range) {
+          const int filter_read_offset = tile_size +
+            (kDirection == DIRECTION_FORWARD ?
+            filter_pixels * (thread_channel * multiplier + m) : filter_pixels * (thread_channel * multiplier + m + 1));
+          int shared_offset = data_idx;
+          const DType* filter_ptr = filter_read_offset + shared_data;
+          CUDA_UNROLL for (int r = 0; r < filter_height; ++r) {
+            CUDA_UNROLL for (int c = 0; c < filter_width; ++c) {
+              if (kDirection == DIRECTION_BACKWARD) {
+                filter_ptr--;
+              }
+              const DType filter_value = *filter_ptr;
+              const DType* const tile_ptr = shared_offset + shared_data;
+              sum1 += filter_value * tile_ptr[0];
+              sum2 += filter_value * tile_ptr[tile_offset];
+              ++shared_offset;
+              if (kDirection == DIRECTION_FORWARD) {
+                filter_ptr++;
+              }
+            }
+            shared_offset += in_increment;
+          }
+        }
+
+        // Note: the condition to reach this is uniform across the entire block.
+        __syncthreads();
+      }
+      
+      if (slice_in_range) {
+        DType* const out_ptr = out_offset + output;
+        if (kDirection == DIRECTION_FORWARD) {
+          out_ptr[0] = sum1;
+          if (!skip_second) {
+            out_ptr[block_pixels] = sum2;
+          }
+        } else {
+          out_ptr[0] += sum1;
+          if (!skip_second) {
+            out_ptr[block_pixels] += sum2;
+          }
+        }
+      }
+
+      // Note: the condition to reach this is uniform across the entire block.
+      __syncthreads();
+    }
   }
 }
 
 template<typename DType>
 __global__ void __launch_bounds__(640, 2)
-DepthwiseConv2dBackwardDataKernel(const DepthwiseArgs args,
+DepthwiseConv2dV2BackwardDataKernel(const DepthwiseArgs args,
                                   const DType* out_grad,
                                   const DType* filter, DType* in_grad,
                                   int num_in_grad) {
@@ -342,6 +406,8 @@ DepthwiseConv2dBackwardDataKernel(const DepthwiseArgs args,
   const int pad_width = args.pad_width;
   const int out_height = args.out_height;
   const int out_width = args.out_width;
+
+  const int multiplier = args.out_channel / args.in_channel;
 
   const int in_pixels = in_height * in_width;
   const int out_pixels = out_height * out_width;
@@ -363,19 +429,21 @@ DepthwiseConv2dBackwardDataKernel(const DepthwiseArgs args,
     const int out_w_end = mxnet::common::cuda::CudaMin(
         out_width - 1, (in_w + pad_width) / stride_width);
 
-    const int filter_offset_temp = channel_idx * filter_height * filter_width;
-    const int out_grad_offset_temp = (batch_idx * channel * out_pixels) +
-        (channel_idx * out_pixels);
+    for (int m = 0; m < multiplier; ++m) {
+      const int filter_offset_temp = (channel_idx * multiplier + m) * filter_height * filter_width;
+      const int out_grad_offset_temp = (batch_idx * channel * multiplier * out_pixels) +
+          ((channel_idx * multiplier + m) * out_pixels);
 
-    for (int out_h = out_h_start; out_h <= out_h_end; ++out_h) {
-      const int f_h = in_h + pad_height - out_h * stride_height;
-      const int filter_offset_h = filter_offset_temp + f_h * filter_width;
-      const int out_grad_offset_h = out_grad_offset_temp + out_h * out_width;
-      for (int out_w = out_w_start; out_w <= out_w_end; ++out_w) {
-        const int f_w = in_w + pad_width - out_w * stride_width;
-        const int filter_offset = filter_offset_h + f_w;
-        const int out_grad_offset = out_grad_offset_h + out_w;
-        sum += ldg(out_grad + out_grad_offset) * ldg(filter + filter_offset);
+      for (int out_h = out_h_start; out_h <= out_h_end; ++out_h) {
+        const int f_h = in_h + pad_height - out_h * stride_height;
+        const int filter_offset_h = filter_offset_temp + f_h * filter_width;
+        const int out_grad_offset_h = out_grad_offset_temp + out_h * out_width;
+        for (int out_w = out_w_start; out_w <= out_w_end; ++out_w) {
+          const int f_w = in_w + pad_width - out_w * stride_width;
+          const int filter_offset = filter_offset_h + f_w;
+          const int out_grad_offset = out_grad_offset_h + out_w;
+          sum += ldg(out_grad + out_grad_offset) * ldg(filter + filter_offset);
+        }
       }
     }
     const int in_grad_offset = (batch_idx * channel * in_pixels) +
@@ -398,7 +466,7 @@ DepthwiseConv2dBackwardDataKernel(const DepthwiseArgs args,
 // kAccumPixels * 64 >= args.in_height * args.in_width * kBlockSlices.
 template <typename DType, int kBlockSlices, int kAccumPixels, int kFilterHeight, int kFilterWidth>
 __global__
-__launch_bounds__(1024, 2) void DepthwiseConv2dBackwardFilterKernelSmall(
+__launch_bounds__(1024, 2) void DepthwiseConv2dV2BackwardFilterKernelSmall(
     const DepthwiseArgs args, const DType* output, const DType* input, DType* filter) {
   extern __shared__ __align__(sizeof(DType)) unsigned char shared_memory[];
   DType* const shared_data = reinterpret_cast<DType*>(shared_memory);
@@ -410,6 +478,8 @@ __launch_bounds__(1024, 2) void DepthwiseConv2dBackwardFilterKernelSmall(
   const int filter_width = kFilterWidth > 0 ? kFilterWidth : args.filter_width;
   const int pad_height = args.pad_height;
   const int pad_width = args.pad_width;
+
+  const int multiplier = args.out_channel / args.in_channel;
 
   const int block_height = blockDim.y;
 
@@ -470,11 +540,12 @@ __launch_bounds__(1024, 2) void DepthwiseConv2dBackwardFilterKernelSmall(
   for (int b = blockIdx.x; b < in_blocks; b += gridDim.x) {
     const int slice = b * kBlockSlices;
 
-    const int inout_offset = slice * in_pixels + tensor_idx;
+    const int in_offset = slice * in_pixels + tensor_idx;
+    //const int in_offset = slice * in_pixels + tensor_idx;
     const bool slice_in_range = slice < max_slice;
 
     if (slice_in_range) {
-      const DType* const in_ptr = inout_offset + input;
+      const DType* const in_ptr = in_offset + input;
       DType* const tile_ptr = tile_idx + shared_data;
       tile_ptr[0] = ldg(in_ptr);
       if (!skip_second) {
@@ -489,57 +560,61 @@ __launch_bounds__(1024, 2) void DepthwiseConv2dBackwardFilterKernelSmall(
     // so we cannot use the FULL_WARP_MASK there
     CREATE_SHFL_MASK(active_threads, slice_in_range);
 
-    if (slice_in_range) {
-      const DType* const out_ptr = inout_offset + output;
-      const DType out1 = ldg(out_ptr);
-      const DType out2 = skip_second ? DType(0) : ldg(block_pixels + out_ptr);
-      int shared_offset = data_idx;
-      DType* accum_ptr = accum_offset + shared_data;
-      CUDA_UNROLL for (int r = 0; r < filter_height; ++r) {
-        CUDA_UNROLL for (int c = 0; c < filter_width; ++c) {
-          const DType* const tile_ptr = shared_offset + shared_data;
-          DType val = out1 * tile_ptr[0] + out2 * tile_ptr[tile_offset];
-          // Warp-accumulate pixels of the same depth and write to accumulator.
-          for (int delta = 16 / kBlockSlices; delta > 0; delta /= 2) {
-            val += __shfl_down_sync(active_threads, val, delta);
+    for (int m = 0; m < multiplier; ++m){
+      const int out_offset = (slice * multiplier + m) * in_pixels + tensor_idx;
+      if (slice_in_range) {
+        const DType* const out_ptr = out_offset + output;
+        const DType out1 = ldg(out_ptr);
+        const DType out2 = skip_second ? DType(0) : ldg(block_pixels + out_ptr);
+        int shared_offset = data_idx;
+        DType* accum_ptr = accum_offset + shared_data;
+        CUDA_UNROLL for (int r = 0; r < filter_height; ++r) {
+          CUDA_UNROLL for (int c = 0; c < filter_width; ++c) {
+            const DType* const tile_ptr = shared_offset + shared_data;
+            DType val = out1 * tile_ptr[0] + out2 * tile_ptr[tile_offset];
+            // Warp-accumulate pixels of the same depth and write to accumulator.
+            for (int delta = 16 / kBlockSlices; delta > 0; delta /= 2) {
+              val += __shfl_down_sync(active_threads, val, delta);
+            }
+            if (!(thread_idx & 32 / kBlockSlices - 1)) {
+              *accum_ptr = val;
+            }
+            ++shared_offset;
+            accum_ptr += accum_increment;
           }
-          if (!(thread_idx & 32 / kBlockSlices - 1)) {
-            *accum_ptr = val;
-          }
-          ++shared_offset;
-          accum_ptr += accum_increment;
-        }
-        shared_offset += in_increment;
-      }
-    }
-
-    // Note: the condition to reach this is uniform across the entire block.
-    __syncthreads();
-
-    const DType* const accum_data = tile_size + shared_data;
-    for (int i = thread_idx; i < accum_size; i += block_size) {
-      const int filter_idx = i / kAccumPixels;
-      const int filter_pix = filter_idx / kBlockSlices;
-      const int filter_channel = (slice + filter_idx % kBlockSlices) % in_channel;
-      // convert to CHW
-      const int filter_offset = filter_channel * filter_pixels +
-          (filter_pix/filter_width) * filter_height + filter_pix % filter_width;
-
-      if (filter_channel < in_channel) {
-        DType val = accum_data[i];
-        // Warp-accumulate pixels of the same depth from the accumulator.
-        int lane_id;
-        asm volatile ("mov.u32 %0, %laneid;" : "=r"(lane_id));
-        int sub_warp = lane_id / kAccumPixels;
-        int zeros = sub_warp * kAccumPixels;
-        unsigned mask = (kAccumPixels == 32) ? FULL_WARP_MASK : (((1U << kAccumPixels) - 1) << zeros);
-        for (int delta = kAccumPixels / 2; delta > 0; delta /= 2) {
-          val += __shfl_xor_sync(mask, val, delta);
-        }
-        if (!(thread_idx & kAccumPixels - 1)) {
-          atomicAdd(filter_offset + filter, val);
+          shared_offset += in_increment;
         }
       }
+
+      // Note: the condition to reach this is uniform across the entire block.
+      __syncthreads();
+
+      const DType* const accum_data = tile_size + shared_data;
+      for (int i = thread_idx; i < accum_size; i += block_size) {
+        const int filter_idx = i / kAccumPixels;
+        const int filter_pix = filter_idx / kBlockSlices;
+        const int filter_channel = (slice + filter_idx % kBlockSlices) % in_channel;
+        // convert to CHW
+        const int filter_offset = (filter_channel * multiplier + m) * filter_pixels +
+            (filter_pix/filter_width) * filter_height + filter_pix % filter_width;
+
+        if (filter_channel < in_channel) {
+          DType val = accum_data[i];
+          // Warp-accumulate pixels of the same depth from the accumulator.
+          int lane_id;
+          asm volatile ("mov.u32 %0, %laneid;" : "=r"(lane_id));
+          int sub_warp = lane_id / kAccumPixels;
+          int zeros = sub_warp * kAccumPixels;
+          unsigned mask = (kAccumPixels == 32) ? FULL_WARP_MASK : (((1U << kAccumPixels) - 1) << zeros);
+          for (int delta = kAccumPixels / 2; delta > 0; delta /= 2) {
+            val += __shfl_xor_sync(mask, val, delta);
+          }
+          if (!(thread_idx & kAccumPixels - 1)) {
+            atomicAdd(filter_offset + filter, val);
+          }
+        }
+      }
+
     }
   }
 }
@@ -547,33 +622,9 @@ __launch_bounds__(1024, 2) void DepthwiseConv2dBackwardFilterKernelSmall(
 
 }  // namespace cuda
 
-// Returns whether depthwise convolution forward or backward input pass can be
-// performed using the faster ('Small') variant of the kernel.
-bool CanLaunchDepthwiseConv2dGPUSmall(const DepthwiseArgs& args) {
-  return args.stride_height == 1 && args.stride_width == 1 && args.in_height <= 32 &&
-      args.in_width <= 32 && args.in_height == args.out_height &&
-      args.in_width == args.out_width && args.pad_height >= 0 &&
-      args.pad_height < args.filter_height && args.pad_width >= 0 &&
-      args.pad_width < args.filter_width &&
-      //args.filter_height * args.filter_width <= (args.in_height + 1) / 2 * args.in_width && args.in_width >= 10;
-      args.filter_height * args.filter_width <= (args.in_height + 1) / 2 * args.in_width;
-}
-
-// Returns whether depthwise convolution backward filter pass can be performed
-// using the faster ('Small') variant of the kernel.
-bool CanLaunchDepthwiseConv2dBackwardFilterGPUSmall(const DepthwiseArgs args,
-                                                    const int block_height) {
-  return args.stride_height == 1 && args.stride_width == 1 && args.in_height <= 32 &&
-      args.in_width <= 32 && args.in_height == args.out_height &&
-      args.in_width == args.out_width && args.pad_height >= 0 &&
-      args.pad_height < args.filter_height && args.pad_width >= 0 &&
-      args.pad_width < args.filter_width && block_height <= args.in_height &&
-      args.filter_height * args.filter_width <= block_height * args.in_width;
-}
-
 template <typename DType, cuda::DepthwiseConv2dDirection kDirection,
           int kBlockSlices, bool kEvenHeight>
-void LaunchDepthwiseConv2dGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+void LaunchDepthwiseConv2dV2GPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                    const DepthwiseArgs args,
                                    const DType* input, const DType* filter, DType* output) {
   const int block_height = (args.in_height + 1) / 2;
@@ -583,54 +634,61 @@ void LaunchDepthwiseConv2dGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
   const int tile_height = block_height * 2 + args.filter_height - 1;
   const int tile_pixels = tile_height * tile_width;
   const int filter_pixels = args.filter_height * args.filter_width;
+
+  const int channel = args.out_channel < args.in_channel ? args.out_channel : args.in_channel;
+
+  const int multiplier = args.out_channel < args.in_channel ? args.in_channel / args.out_channel : args.out_channel / args.in_channel;
   const int shared_memory_size =
-      kBlockSlices * (tile_pixels + filter_pixels) * sizeof(DType);
+      kBlockSlices * (tile_pixels + filter_pixels * multiplier) * sizeof(DType);
   const int num_outputs =
-      args.batch * args.out_height * args.out_width * args.out_channel;
+      args.batch * args.out_height * args.out_width * channel;
   int block_count = std::min(num_outputs/(block_dim.x * block_dim.y * block_dim.z) + 1,
                              (unsigned)mshadow::cuda::kMaxGridNum);
   auto s = mshadow::Stream<mxnet::gpu>::GetStream(stream);
   if (args.filter_height == 3 && args.filter_width == 3) {
-    cuda::DepthwiseConv2dKernelSmall<DType, kDirection, kBlockSlices, kEvenHeight, 3, 3>
+    cuda::DepthwiseConv2dV2KernelSmall<DType, kDirection, kBlockSlices, kEvenHeight, 3, 3>
         <<<block_count, block_dim, shared_memory_size, s>>>(args, input, filter, output);
   } else {
-    cuda::DepthwiseConv2dKernelSmall<DType, kDirection, kBlockSlices, kEvenHeight, -1, -1>
+    cuda::DepthwiseConv2dV2KernelSmall<DType, kDirection, kBlockSlices, kEvenHeight, -1, -1>
         <<<block_count, block_dim, shared_memory_size, s>>>(args, input, filter, output);
   }
-  MSHADOW_CUDA_POST_KERNEL_CHECK(DepthwiseConv2dKernelSmall);
+  MSHADOW_CUDA_POST_KERNEL_CHECK(DepthwiseConv2dV2KernelSmall);
 }
 
 template <typename DType, cuda::DepthwiseConv2dDirection kDirection, int kBlockSlices>
-void LaunchDepthwiseConv2dGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+void LaunchDepthwiseConv2dV2GPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                    const DepthwiseArgs args,
                                    const DType* input, const DType* filter, DType* output) {
   if (args.in_height & 1) {
-    LaunchDepthwiseConv2dGPUSmall<DType, kDirection, kBlockSlices, false>(
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, kBlockSlices, false>(
         stream, args, input, filter, output);
   } else {
-    LaunchDepthwiseConv2dGPUSmall<DType, kDirection, kBlockSlices, true>(
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, kBlockSlices, true>(
         stream, args, input, filter, output);
   }
 }
 
 template <typename DType, cuda::DepthwiseConv2dDirection kDirection>
-void LaunchDepthwiseConv2dGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+void LaunchDepthwiseConv2dV2GPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                    const DepthwiseArgs args,
                                    const DType* input, const DType* filter, DType* output) {
   // Maximize (power of two) kBlockSlices while keeping a block within 1024
   // threads (2 pixels per thread).
   const int block_pixels = (args.in_height + 1) / 2 * args.in_width;
   if (block_pixels > 256) {
-    LaunchDepthwiseConv2dGPUSmall<DType, kDirection, 2>(stream, args, input, filter, output);
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, 2>(stream, args, input, filter, output);
   } else if (block_pixels > 128) {
-    LaunchDepthwiseConv2dGPUSmall<DType, kDirection, 4>(stream, args, input, filter, output);
-  } else {
-    LaunchDepthwiseConv2dGPUSmall<DType, kDirection, 8>(stream, args, input, filter, output);
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, 4>(stream, args, input, filter, output);
+  } else if (block_pixels > 64){
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, 8>(stream, args, input, filter, output);
+  }
+  else {
+    LaunchDepthwiseConv2dV2GPUSmall<DType, kDirection, 16>(stream, args, input, filter, output);
   }
 }
 
 template <typename DType, int kBlockSlices, int kAccumPixels>
-bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+bool TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                                     const DepthwiseArgs args,
                                                     const int block_height,
                                                     const DType* out_grad,
@@ -648,24 +706,26 @@ bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> 
 
   dim3 block_dim = dim3(args.in_width, block_height, kBlockSlices);
   const int num_out_grad =
-      args.batch * args.out_height * args.out_width * args.out_channel;
+      args.batch * args.out_height * args.out_width * args.in_channel;
+  //const int num_out_grad =
+  //    args.batch * args.out_height * args.out_width * args.out_channel;
   int block_count = num_out_grad/(block_dim.x * block_dim.y * block_dim.z) + 1;
   auto s = mshadow::Stream<mxnet::gpu>::GetStream(stream);
   if (args.filter_height == 3 && args.filter_width == 3) {
-    cuda::DepthwiseConv2dBackwardFilterKernelSmall<DType, kBlockSlices, kAccumPixels, 3, 3>
+    cuda::DepthwiseConv2dV2BackwardFilterKernelSmall<DType, kBlockSlices, kAccumPixels, 3, 3>
         <<<block_count, block_dim, shared_memory_size, s>>>(
             args, out_grad, input, filter_grad);
   } else {
-    cuda::DepthwiseConv2dBackwardFilterKernelSmall<DType, kBlockSlices, kAccumPixels, -1, -1>
+    cuda::DepthwiseConv2dV2BackwardFilterKernelSmall<DType, kBlockSlices, kAccumPixels, -1, -1>
         <<<block_count, block_dim, shared_memory_size, s>>>(
             args, out_grad, input, filter_grad);
   }
-  MSHADOW_CUDA_POST_KERNEL_CHECK(DepthwiseConv2dBackwardFilterKernelSmall);
+  MSHADOW_CUDA_POST_KERNEL_CHECK(DepthwiseConv2dV2BackwardFilterKernelSmall);
   return true;
 }
 
 template <typename DType, int kBlockSlices>
-bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+bool TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                                     const DepthwiseArgs args,
                                                     const int block_height,
                                                     const DType* out_grad,
@@ -675,19 +735,19 @@ bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> 
   // kAccumPixels * 32 >= block_height * in_width * kBlockSlices.
   const int block_pixels = block_height * args.in_width * kBlockSlices;
   if (block_pixels > 512) {
-    return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, kBlockSlices, 32>(
+    return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, kBlockSlices, 32>(
         stream, args, block_height, out_grad, input, filter_grad);
   } else if (block_pixels > 256) {
-    return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, kBlockSlices, 16>(
+    return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, kBlockSlices, 16>(
         stream, args, block_height, out_grad, input, filter_grad);
   } else {
-    return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, kBlockSlices, 8>(
+    return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, kBlockSlices, 8>(
         stream, args, block_height, out_grad, input, filter_grad);
   }
 }
 
 template <typename DType>
-bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
+bool TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> *stream,
                                                     const DepthwiseArgs args,
                                                     const DType* out_grad,
                                                     const DType* input,
@@ -715,13 +775,13 @@ bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> 
 
   switch (block_slices) {
     case 8:
-      return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, 8>(
+      return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, 8>(
           stream, args, block_height, out_grad, input, filter_grad);
     case 4:
-      return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, 4>(
+      return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, 4>(
           stream, args, block_height, out_grad, input, filter_grad);
     case 2:
-      return TryLaunchDepthwiseConv2dBackwardFilterGPUSmall<DType, 2>(
+      return TryLaunchDepthwiseConv2dV2BackwardFilterGPUSmall<DType, 2>(
           stream, args, block_height, out_grad, input, filter_grad);
     default:
       return false;
@@ -731,4 +791,4 @@ bool TryLaunchDepthwiseConv2dBackwardFilterGPUSmall(mshadow::Stream<mxnet::gpu> 
 }  // namespace depthwise_conv
 }  // namespace tf
 
-#endif  // MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_CUH_
+#endif  // MXNET_OPERATOR_DEPTHWISE_CONVOLUTION_TF_V2_CUH_

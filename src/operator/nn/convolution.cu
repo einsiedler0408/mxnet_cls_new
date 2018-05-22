@@ -43,9 +43,9 @@ Operator* CreateOp<gpu>(ConvolutionParam param, int dtype,
   Operator *op = NULL;
 
   // depth wise conv
-  if (param.num_filter == param.num_group &&
+  if (param.method == 1 && param.num_group == (*in_shape)[conv::kData][1] &&
       param.layout.value() == mshadow::kNCHW &&
-      param.num_filter == (*in_shape)[conv::kData][1] &&
+      param.num_filter % (*in_shape)[conv::kData][1] == 0 &&
       param.kernel.ndim() == 2 &&
       param.dilate == mshadow::Shape2(1, 1) &&
       dtype == mshadow::kFloat32) {
