@@ -42,9 +42,9 @@ namespace op {
  * \brief The Operator used to perform convolution using cuDNN kernels.
  */
 template<typename DType>
-class CuDNNConvolutionOp : public Operator {
+class CuDNNGroupConvolutionOp : public Operator {
  public:
-  explicit CuDNNConvolutionOp(const ConvolutionParam& param,
+  explicit CuDNNGroupConvolutionOp(const ConvolutionParam& param,
                               int forward_compute_type,
                               int backward_compute_type,
                               const std::vector<TShape>& in_shape,
@@ -99,9 +99,14 @@ class CuDNNConvolutionOp : public Operator {
     // future cuDNN releases.
     SelectAlgo(ctx, in_shape, out_shape,
                cudnn_forward_compute_type, cudnn_backward_compute_type);
+               
+    parallel_num = param_.num_group;
+    for (uint32_t g = 0; g < parallel_num; ++g) {
+        streams.push_back(mshadow::NewStream<gpu>(true, true, ctx.dev_id));
+    }
   }
 
-  ~CuDNNConvolutionOp() {
+  ~CuDNNGroupConvolutionOp() {
     if (init_cudnn_) {
       CUDNN_CALL(cudnnDestroyTensorDescriptor(in_desc_));
       CUDNN_CALL(cudnnDestroyTensorDescriptor(out_desc_));
@@ -110,6 +115,10 @@ class CuDNNConvolutionOp : public Operator {
       CUDNN_CALL(cudnnDestroyConvolutionDescriptor(forward_conv_desc_));
       CUDNN_CALL(cudnnDestroyConvolutionDescriptor(back_conv_desc_));
       CUDNN_CALL(cudnnDestroyConvolutionDescriptor(back_conv_desc_w_));
+    }
+    
+    for (uint32_t g = 0; g < parallel_num; ++g) {
+        MSHADOW_CATCH_ERROR(mshadow::DeleteStream<gpu>(streams[g]));
     }
   }
 
@@ -124,19 +133,25 @@ class CuDNNConvolutionOp : public Operator {
     CHECK_EQ(out_data.size(), 1U);
     Stream<gpu> *s = ctx.get_stream<gpu>();
     GetTempSize(ctx);
-    Tensor<gpu, 1, DType> workspace = AllocateTempWorkspace(ctx, forward_workspace_byte_);
-    size_t workspace_size = TensorSizeBytes(workspace);
+    Tensor<gpu, 1, DType> workspace = AllocateTempWorkspace(ctx, forward_workspace_byte_ * parallel_num);
+    size_t workspace_size = TensorSizeBytes(workspace) / parallel_num;
 
     // I/O's should have 2 more dims than the kernel dim
     DType *data_ptr = GetNdPtr(in_data[conv::kData], param_.kernel.ndim() + 2, s);
     DType *wmat_ptr = GetNdPtr(in_data[conv::kWeight], param_.kernel.ndim() + 2, s);
     DType *out_ptr = GetNdPtr(out_data[conv::kOut], param_.kernel.ndim() + 2, s);
-
+    Tensor<gpu, 1, DType> bias;
+    if (!param_.no_bias) bias = in_data[conv::kBias].get<gpu, 1, DType>(s);
+ 
+    CUDA_CALL(cudaStreamSynchronize(mshadow::Stream<gpu>::GetStream(s)));
+ 
     for (uint32_t g = 0; g < param_.num_group; ++g) {
       typename DataType<DType>::ScaleType alpha = 1.0f;
       typename DataType<DType>::ScaleType beta = 0.0f;
       typename DataType<DType>::ScaleType beta_add = 1.0f;
-      CUDNN_CALL(cudnnConvolutionForward(s->dnn_handle_,
+      
+      uint32_t sid = g % parallel_num;
+      CUDNN_CALL(cudnnConvolutionForward(streams[sid]->dnn_handle_,
                                        &alpha,
                                        in_desc_,
                                        data_ptr + data_offset_ * g,
@@ -144,15 +159,14 @@ class CuDNNConvolutionOp : public Operator {
                                        wmat_ptr + weight_offset_ * g,
                                        forward_conv_desc_,
                                        forward_algo_.AlgoNumber(),
-                                       workspace.dptr_,
+                                       workspace.dptr_ + sid * workspace_size/sizeof(DType),
                                        workspace_size,
                                        req[conv::kOut] == kAddTo? &beta_add : &beta,
                                        out_desc_,
                                        out_ptr + out_offset_ * g));
       if (!param_.no_bias) {
-        Tensor<gpu, 1, DType> bias = in_data[conv::kBias].get<gpu, 1, DType>(s);
         #if CUDNN_MAJOR >= 4
-        CUDNN_CALL(cudnnAddTensor(s->dnn_handle_,
+        CUDNN_CALL(cudnnAddTensor(streams[sid]->dnn_handle_,
                                 &alpha,
                                 bias_desc_,
                                 bias.dptr_ + bias_offset_ * g,
@@ -161,7 +175,7 @@ class CuDNNConvolutionOp : public Operator {
                                 out_ptr + out_offset_ * g));
         #endif
         #if CUDNN_MAJOR == 3
-        CUDNN_CALL(cudnnAddTensor(s->dnn_handle_,
+        CUDNN_CALL(cudnnAddTensor(streams[sid]->dnn_handle_,
                                 CUDNN_ADD_SAME_C,
                                 &alpha,
                                 bias_desc_,
@@ -172,6 +186,11 @@ class CuDNNConvolutionOp : public Operator {
         #endif
       }
     }
+
+    for (uint32_t g = 0; g < parallel_num; ++g) {
+        CUDA_CALL(cudaStreamSynchronize(mshadow::Stream<gpu>::GetStream(streams[g])));
+    }
+        
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -188,22 +207,28 @@ class CuDNNConvolutionOp : public Operator {
     CHECK(in_data.size() == expected && in_grad.size() == expected);
     Stream<gpu> *s = ctx.get_stream<gpu>();
 
+    Tensor<gpu, 1, DType> workspace = AllocateTempWorkspace(ctx, backward_workspace_byte_ * parallel_num);
+    size_t workspace_size = TensorSizeBytes(workspace) / parallel_num;
+    
     // I/O's should have 2 more dims than the kernel dim
     DType *grad_ptr = GetNdPtr(out_grad[conv::kOut], param_.kernel.ndim() + 2, s);
     DType *wmat_ptr = GetNdPtr(in_data[conv::kWeight], param_.kernel.ndim() + 2, s);
     DType *gwmat_ptr = GetNdPtr(in_grad[conv::kWeight], param_.kernel.ndim() + 2, s);
     DType *data_ptr = GetNdPtr(in_data[conv::kData], param_.kernel.ndim() + 2, s);
     DType *gdata_ptr = GetNdPtr(in_grad[conv::kData], param_.kernel.ndim() + 2, s);
+    Tensor<gpu, 1, DType> gbias;
+    if (!param_.no_bias) gbias = in_grad[conv::kBias].get<gpu, 1, DType>(s);
 
-    Tensor<gpu, 1, DType> workspace = AllocateTempWorkspace(ctx, backward_workspace_byte_);
-    size_t workspace_size = TensorSizeBytes(workspace);
+    CUDA_CALL(cudaStreamSynchronize(mshadow::Stream<gpu>::GetStream(s)));
+
     for (uint32_t g = 0; g < param_.num_group; ++g) {
       typename DataType<DType>::ScaleType alpha = 1.0f;
       typename DataType<DType>::ScaleType beta = 0.0f;
       typename DataType<DType>::ScaleType beta_add = 1.0f;
+      
+      uint32_t sid = g % parallel_num;
       if (!param_.no_bias && (req[conv::kBias] != kNullOp)) {
-        Tensor<gpu, 1, DType> gbias = in_grad[conv::kBias].get<gpu, 1, DType>(s);
-        CUDNN_CALL(cudnnConvolutionBackwardBias(s->dnn_handle_,
+        CUDNN_CALL(cudnnConvolutionBackwardBias(streams[sid]->dnn_handle_,
                                               &alpha,
                                               out_desc_,
                                               grad_ptr + out_offset_ * g,
@@ -213,7 +238,7 @@ class CuDNNConvolutionOp : public Operator {
       }
       if (req[conv::kWeight] != kNullOp) {
         #if CUDNN_MAJOR <= 4
-          CUDNN_CALL(cudnnConvolutionBackwardFilter_v3(s->dnn_handle_,
+          CUDNN_CALL(cudnnConvolutionBackwardFilter_v3(streams[sid]->dnn_handle_,
                &alpha,
                in_desc_,
                data_ptr + data_offset_ * g,
@@ -221,13 +246,13 @@ class CuDNNConvolutionOp : public Operator {
                grad_ptr + out_offset_ * g,
                back_conv_desc_w_,
                back_algo_w_.AlgoNumber(),
-               workspace.dptr_,
+               workspace.dptr_ + sid * workspace_size/sizeof(DType),
                workspace_size,
                req[conv::kWeight] == kAddTo? &beta_add : &beta,
                filter_desc_,
                gwmat_ptr + weight_offset_ * g));
         #elif CUDNN_MAJOR >= 5
-          CUDNN_CALL(cudnnConvolutionBackwardFilter(s->dnn_handle_,
+          CUDNN_CALL(cudnnConvolutionBackwardFilter(streams[sid]->dnn_handle_,
                &alpha,
                in_desc_,
                data_ptr + data_offset_ * g,
@@ -235,7 +260,7 @@ class CuDNNConvolutionOp : public Operator {
                grad_ptr + out_offset_ * g,
                back_conv_desc_w_,
                back_algo_w_.AlgoNumber(),
-               workspace.dptr_,
+               workspace.dptr_ + sid * workspace_size/sizeof(DType),
                workspace_size,
                req[conv::kWeight] == kAddTo? &beta_add : &beta,
                filter_desc_,
@@ -244,7 +269,7 @@ class CuDNNConvolutionOp : public Operator {
       }
       if (req[conv::kData] != kNullOp) {
         #if CUDNN_MAJOR <= 4
-          CUDNN_CALL(cudnnConvolutionBackwardData_v3(s->dnn_handle_,
+          CUDNN_CALL(cudnnConvolutionBackwardData_v3(streams[sid]->dnn_handle_,
                &alpha,
                filter_desc_,
                wmat_ptr + weight_offset_ * g,
@@ -252,13 +277,13 @@ class CuDNNConvolutionOp : public Operator {
                grad_ptr + out_offset_ * g,
                back_conv_desc_,
                back_algo_.AlgoNumber(),
-               workspace.dptr_,
+               workspace.dptr_ + sid * workspace_size/sizeof(DType),
                workspace_size,
                req[conv::kData] == kAddTo? &beta_add : &beta,
                in_desc_,
                gdata_ptr + data_offset_ * g));
         #elif CUDNN_MAJOR >= 5
-          CUDNN_CALL(cudnnConvolutionBackwardData(s->dnn_handle_,
+          CUDNN_CALL(cudnnConvolutionBackwardData(streams[sid]->dnn_handle_,
                &alpha,
                filter_desc_,
                wmat_ptr + weight_offset_ * g,
@@ -266,13 +291,22 @@ class CuDNNConvolutionOp : public Operator {
                grad_ptr + out_offset_ * g,
                back_conv_desc_,
                back_algo_.AlgoNumber(),
-               workspace.dptr_,
+               workspace.dptr_ + sid * workspace_size/sizeof(DType),
                workspace_size,
                req[conv::kData] == kAddTo? &beta_add : &beta,
                in_desc_,
                gdata_ptr + data_offset_ * g));
         #endif
       }
+    }
+    
+    for (uint32_t g = 0; g < parallel_num; ++g) {
+        CUDA_CALL(cudaStreamSynchronize(mshadow::Stream<gpu>::GetStream(streams[g])));
+    }
+    if (param_.wd != 0) {
+        Tensor<gpu, 1, DType> weight = in_data[conv::kWeight].get_with_shape<gpu, 1, DType>(Shape1(in_data[conv::kWeight].Size()), s);
+        Tensor<gpu, 1, DType> gweight = in_grad[conv::kWeight].get_with_shape<gpu, 1, DType>(Shape1(in_grad[conv::kWeight].Size()), s);
+        gweight += weight * scalar<DType>(param_.wd);
     }
   }
 
@@ -781,7 +815,11 @@ class CuDNNConvolutionOp : public Operator {
                out_desc_,
                forward_algo_.AlgoNumber(),
                &forward_workspace_byte_));
-
+               
+    //backward_workspace_byte_ = (backward_workspace_byte_ / sizeof(DType) + 1) * sizeof(DType);
+    //forward_workspace_byte_ = (forward_workspace_byte_ / sizeof(DType) + 1) * sizeof(DType);
+    CHECK(backward_workspace_byte_ / sizeof(DType) * sizeof(DType) == backward_workspace_byte_);
+    CHECK(forward_workspace_byte_ / sizeof(DType) * sizeof(DType) == forward_workspace_byte_);
     init_temp_size_ = true;
   }
 
@@ -878,6 +916,9 @@ class CuDNNConvolutionOp : public Operator {
   // Allow TensorCore algo policy
   bool cudnn_tensor_core_;
   ConvolutionParam param_;
+  
+  uint32_t parallel_num;
+  std::vector<mshadow::Stream<gpu>*> streams;
 };
 #endif  // __CUDACC__ && CUDNN
 }  // namespace op
