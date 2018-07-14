@@ -64,7 +64,6 @@ __global__ void DownsampleForward(const int n,
     const int ow = s % output_width;
 
     DType kernel_sum = 0;
-    DType kernel_normalization = 0;
     const DType* input_data_cur = input_data + bc * input_spatial_dim;
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
@@ -73,17 +72,16 @@ __global__ void DownsampleForward(const int n,
             int iw = ow * 2 + dw;
             int kh = kernel_size + dh;
             int kw = kernel_size + dw;
-            if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
-                continue;
+            ih = min(max(ih, 0), input_height-1);
+            iw = min(max(iw, 0), input_width-1);
             
             DType input_value = input_data_cur[ih * input_width + iw];
             DType kernel_value = kernel_data[kh * kernel_dim + kw];
             
             kernel_sum += input_value * kernel_value;
-            kernel_normalization += kernel_value;      
         }
     }
-    output_data[index] += kernel_sum / kernel_normalization;
+    output_data[index] += kernel_sum;
   }
 }
 
@@ -100,7 +98,8 @@ __global__ void DownsampleBackward(const int n,
     const int oh = s / output_width;
     const int ow = s % output_width;
 
-    DType kernel_normalization = 0;
+    DType output_grad_value = output_grad[index];
+    DType* input_grad_cur = input_grad + bc * input_spatial_dim;
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
@@ -108,26 +107,11 @@ __global__ void DownsampleBackward(const int n,
             int iw = ow * 2 + dw;
             int kh = kernel_size + dh;
             int kw = kernel_size + dw;
-            if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
-                continue;
-            DType kernel_value = kernel_data[kh * kernel_dim + kw];
-            kernel_normalization += kernel_value;      
-        }
-    }
-    
-    DType output_grad_value = output_grad[index];
-    DType* input_grad_cur = input_grad + bc * input_spatial_dim;
-    for (int dh = -kernel_size; dh <= kernel_size; dh++) {
-        for (int dw = -kernel_size; dw <= kernel_size; dw++) {
-            int ih = oh * 2 + dh;
-            int iw = ow * 2 + dw;
-            int kh = kernel_size + dh;
-            int kw = kernel_size + dw;
-            if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
-                continue;
+            ih = min(max(ih, 0), input_height-1);
+            iw = min(max(iw, 0), input_width-1);
             
-            DType kernel_grad_value = kernel_data[kh * kernel_dim + kw] / kernel_normalization;
-            atomicAdd(input_grad_cur + ih * input_width + iw, output_grad_value * kernel_grad_value);
+            DType kernel_value = kernel_data[kh * kernel_dim + kw];
+            atomicAdd(input_grad_cur + ih * input_width + iw, output_grad_value * kernel_value);
         }
     }
   }
