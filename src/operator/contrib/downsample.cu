@@ -157,7 +157,7 @@ class DownsampleGPUOp : public Operator{
     using namespace mshadow::cuda::downsample;
     CHECK_EQ(in_data.size(), 2);
     CHECK_EQ(out_data.size(), 1);
-    CHECK_EQ(req.size(), 2);
+    CHECK_EQ(req.size(), 1);
     
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
