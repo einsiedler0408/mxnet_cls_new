@@ -95,7 +95,7 @@ class DownsampleProp : public OperatorProperty {
   }
 
   std::string TypeString() const override {
-    return "_contrib_downsample";
+    return "_contrib_Downsample";
   }
 
   std::vector<ResourceRequest> ForwardResource(
