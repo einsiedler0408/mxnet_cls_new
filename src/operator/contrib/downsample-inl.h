@@ -51,7 +51,10 @@ enum DownsampleOpOutputs {kOutput};
 enum DownsampleForwardResource {kTempResource};
 }  // downsample
 
-struct DownsampleParam : public dmlc::Parameter<DownsampleParam> {};
+struct DownsampleParam : public dmlc::Parameter<DownsampleParam> {
+  DMLC_DECLARE_PARAMETER(DownsampleParam) {
+  }
+};
 
 template<typename xpu>
 Operator *CreateOp(DownsampleParam param);

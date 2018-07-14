@@ -43,7 +43,7 @@
 
 #include "../operator_common.h"
 #include "../mshadow_op.h"
-#include "../common/cuda_utils.h"
+#include "../../common/cuda_utils.h"
 #include "./downsample-inl.h"
 
 namespace mshadow {
@@ -60,12 +60,12 @@ __global__ void DownsampleForward(const int n,
   CUDA_KERNEL_LOOP(index, n) { 
 	const int bc = index / output_spatial_dim;
 	const int s = index % output_spatial_dim;
-    const int oh = s / width;
-    const int ow = s % width;
+    const int oh = s / output_width;
+    const int ow = s % output_width;
 
-    Dtype kernel_sum = 0;
-    Dtype kernel_normalization = 0;
-    const Dtype* input_data_cur = input_data + bc * input_spatial_dim;
+    DType kernel_sum = 0;
+    DType kernel_normalization = 0;
+    const DType* input_data_cur = input_data + bc * input_spatial_dim;
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
@@ -76,8 +76,8 @@ __global__ void DownsampleForward(const int n,
             if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
                 continue;
             
-            Dtype input_value = input_data_cur[ih * input_width + iw];
-            Dtype kernel_value = kernel_data[kh * kernel_dim + kw];
+            DType input_value = input_data_cur[ih * input_width + iw];
+            DType kernel_value = kernel_data[kh * kernel_dim + kw];
             
             kernel_sum += input_value * kernel_value;
             kernel_normalization += kernel_value;      
@@ -86,8 +86,6 @@ __global__ void DownsampleForward(const int n,
     output_data[index] += kernel_sum / kernel_normalization;
   }
 }
-
-cudaMemcpyAsync
 
 template <typename DType>
 __global__ void DownsampleBackward(const int n, 
@@ -99,10 +97,10 @@ __global__ void DownsampleBackward(const int n,
   CUDA_KERNEL_LOOP(index, n) { 
 	const int bc = index / output_spatial_dim;
 	const int s = index % output_spatial_dim;
-    const int oh = s / width;
-    const int ow = s % width;
+    const int oh = s / output_width;
+    const int ow = s % output_width;
 
-    Dtype kernel_normalization = 0;
+    DType kernel_normalization = 0;
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
@@ -112,13 +110,13 @@ __global__ void DownsampleBackward(const int n,
             int kw = kernel_size + dw;
             if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
                 continue;
-            Dtype kernel_value = kernel_data[kh * kernel_dim + kw];
+            DType kernel_value = kernel_data[kh * kernel_dim + kw];
             kernel_normalization += kernel_value;      
         }
     }
     
-    Dtype output_grad_value = output_grad[index];
-    Dtype* input_grad_cur = input_grad + bc * input_spatial_dim;
+    DType output_grad_value = output_grad[index];
+    DType* input_grad_cur = input_grad + bc * input_spatial_dim;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
             int ih = oh * 2 + dh;
@@ -128,7 +126,7 @@ __global__ void DownsampleBackward(const int n,
             if (ih < 0 || ih > input_height - 1 || iw < 0 || iw > input_width - 1)
                 continue;
             
-            Dtype kernel_grad_value = kernel_data[kh * kernel_dim + kw] / kernel_normalization;
+            DType kernel_grad_value = kernel_data[kh * kernel_dim + kw] / kernel_normalization;
             atomicAdd(input_grad_cur + ih * input_width + iw, output_grad_value * kernel_grad_value);
         }
     }
