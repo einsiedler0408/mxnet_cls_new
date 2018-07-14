@@ -52,7 +52,10 @@ enum DownsampleForwardResource {kTempResource};
 }  // downsample
 
 struct DownsampleParam : public dmlc::Parameter<DownsampleParam> {
+  bool backward_kernel;
   DMLC_DECLARE_PARAMETER(DownsampleParam) {
+    DMLC_DECLARE_FIELD(backward_kernel).set_default(false)
+    .describe("Whether backward to kernel");
   }
 };
 
@@ -107,7 +110,10 @@ class DownsampleProp : public OperatorProperty {
     const std::vector<int> &out_grad,
     const std::vector<int> &in_data,
     const std::vector<int> &out_data) const override {
-    return{ out_grad[downsample::kOutput], in_data[downsample::kKernel] };
+    if (param_.backward_kernel)
+        return{ out_grad[downsample::kOutput], in_data[downsample::kData], in_data[downsample::kKernel] };
+    else
+        return{ out_grad[downsample::kOutput], in_data[downsample::kKernel] };
   }
 
   int NumVisibleOutputs() const override {

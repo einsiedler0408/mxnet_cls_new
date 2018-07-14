@@ -91,7 +91,8 @@ __global__ void DownsampleBackward(const int n,
                                       const int input_height, const int input_width,
                                       const DType* kernel_data, const int kernel_size,
                                       const DType* output_grad, const int output_spatial_dim,
-                                      const int output_height, const int output_width) {
+                                      const int output_height, const int output_width,
+                                      const DType* input_data, DType* kernel_grad) {
   CUDA_KERNEL_LOOP(index, n) { 
 	const int bc = index / output_spatial_dim;
 	const int s = index % output_spatial_dim;
@@ -112,6 +113,8 @@ __global__ void DownsampleBackward(const int n,
             
             DType kernel_value = kernel_data[kh * kernel_dim + kw];
             atomicAdd(input_grad_cur + ih * input_width + iw, output_grad_value * kernel_value);
+            if (kernel_grad != NULL)
+                atomicAdd(kernel_grad + kh * kernel_dim + kw, output_grad_value * input_data[bc * input_spatial_dim + ih * input_width + iw]);
         }
     }
   }
@@ -190,8 +193,15 @@ class DownsampleGPUOp : public Operator{
     if (req[downsample::kData] == kWriteTo)
         input_grad = 0;
     
-    // we do not backward to kernel
-    kernel_grad = 0;
+    if (req[downsample::kKernel] == kWriteTo)
+        kernel_grad = 0;
+    
+    const Dtype* input_data_ptr = NULL;
+    Dtype* kernel_grad_ptr = NULL;
+    if (param_.backward_kernel) {
+        input_data_ptr = in_data[downsample::kData].get<xpu, 4, DType>(s).dptr_;
+        kernel_grad_ptr = kernel_grad.dptr_;
+    }
     
     index_t batch_num = input_grad.shape_[0];
     index_t channel_num = input_grad.shape_[1];
@@ -206,7 +216,8 @@ class DownsampleGPUOp : public Operator{
     DownsampleBackward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
           (num_kernels, input_grad.dptr_, input_height * input_width, input_height, input_width,
-          kernel_data.dptr_, kernel_size, output_grad.dptr_, output_height * output_width, output_height, output_width);
+          kernel_data.dptr_, kernel_size, output_grad.dptr_, output_height * output_width, output_height, output_width,
+          input_data_ptr, kernel_grad_ptr);
     MSHADOW_CUDA_POST_KERNEL_CHECK(DownsampleBackward);
   }
 
