@@ -196,8 +196,8 @@ class DownsampleGPUOp : public Operator{
     if (req[downsample::kKernel] == kWriteTo)
         kernel_grad = 0;
     
-    const Dtype* input_data_ptr = NULL;
-    Dtype* kernel_grad_ptr = NULL;
+    const DType* input_data_ptr = NULL;
+    DType* kernel_grad_ptr = NULL;
     if (param_.backward_kernel) {
         input_data_ptr = in_data[downsample::kData].get<xpu, 4, DType>(s).dptr_;
         kernel_grad_ptr = kernel_grad.dptr_;
