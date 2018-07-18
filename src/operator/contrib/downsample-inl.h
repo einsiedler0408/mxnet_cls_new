@@ -53,9 +53,12 @@ enum DownsampleForwardResource {kTempResource};
 
 struct DownsampleParam : public dmlc::Parameter<DownsampleParam> {
   bool backward_kernel;
+  int rescale;
   DMLC_DECLARE_PARAMETER(DownsampleParam) {
     DMLC_DECLARE_FIELD(backward_kernel).set_default(false)
     .describe("Whether backward to kernel");
+    DMLC_DECLARE_FIELD(rescale).set_default(2)
+    .describe("Downsample scale");
   }
 };
 
@@ -85,7 +88,7 @@ class DownsampleProp : public OperatorProperty {
     CHECK_EQ(kshape[0], kshape[1]);
     CHECK_EQ(kshape[0] / 2 * 2 + 1, kshape[0]) << "Only support odd kernel dim";;
     
-    Shape<4> output_shape = Shape4(dshape[0], dshape[1], (dshape[2]-1)/2+1, (dshape[3]-1)/2+1);
+    Shape<4> output_shape = Shape4(dshape[0], dshape[1], (dshape[2]-1)/param_.rescale+1, (dshape[3]-1)/param_.rescale+1);
     out_shape->clear();
     out_shape->push_back(output_shape);
     return true;

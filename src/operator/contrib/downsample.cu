@@ -51,7 +51,7 @@ namespace cuda {
 namespace downsample {
 
 template <typename DType>
-__global__ void DownsampleForward(const int n,
+__global__ void DownsampleForward(const int n, int rescale,
                                       const DType* input_data, const int input_spatial_dim,
                                       const int input_height, const int input_width,
                                       const DType* kernel_data, const int kernel_size,
@@ -68,8 +68,8 @@ __global__ void DownsampleForward(const int n,
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
-            int ih = oh * 2 + dh;
-            int iw = ow * 2 + dw;
+            int ih = oh * rescale + dh;
+            int iw = ow * rescale + dw;
             int kh = kernel_size + dh;
             int kw = kernel_size + dw;
             ih = min(max(ih, 0), input_height-1);
@@ -86,7 +86,7 @@ __global__ void DownsampleForward(const int n,
 }
 
 template <typename DType>
-__global__ void DownsampleBackward(const int n, 
+__global__ void DownsampleBackward(const int n, int rescale,
                                       DType* input_grad, const int input_spatial_dim,
                                       const int input_height, const int input_width,
                                       const DType* kernel_data, const int kernel_size,
@@ -104,8 +104,8 @@ __global__ void DownsampleBackward(const int n,
     int kernel_dim = 2 * kernel_size + 1;
     for (int dh = -kernel_size; dh <= kernel_size; dh++) {
         for (int dw = -kernel_size; dw <= kernel_size; dw++) {
-            int ih = oh * 2 + dh;
-            int iw = ow * 2 + dw;
+            int ih = oh * rescale + dh;
+            int iw = ow * rescale + dw;
             int kh = kernel_size + dh;
             int kw = kernel_size + dw;
             ih = min(max(ih, 0), input_height-1);
@@ -166,7 +166,7 @@ class DownsampleGPUOp : public Operator{
     using namespace mxnet_op;
     DownsampleForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, input_data.dptr_, input_height * input_width, input_height, input_width,
+          (num_kernels, param_.rescale, input_data.dptr_, input_height * input_width, input_height, input_width,
           kernel_data.dptr_, kernel_size, output_data.dptr_, output_height * output_width, output_height, output_width);
     MSHADOW_CUDA_POST_KERNEL_CHECK(DownsampleForward);
     
@@ -215,7 +215,7 @@ class DownsampleGPUOp : public Operator{
     using namespace mxnet_op;
     DownsampleBackward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, input_grad.dptr_, input_height * input_width, input_height, input_width,
+          (num_kernels, param_.rescale, input_grad.dptr_, input_height * input_width, input_height, input_width,
           kernel_data.dptr_, kernel_size, output_grad.dptr_, output_height * output_width, output_height, output_width,
           input_data_ptr, kernel_grad_ptr);
     MSHADOW_CUDA_POST_KERNEL_CHECK(DownsampleBackward);
