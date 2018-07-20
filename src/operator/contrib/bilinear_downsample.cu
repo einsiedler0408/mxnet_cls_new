@@ -83,11 +83,11 @@ __global__ void BilinearDownsampleForward(const int n, float rescale,
 
     for (int h = ih_round - radius; h <= ih_round + radius; h++) {
         for (int w = iw_round - radius; w <= iw_round + radius; w++) {
-            h = min(max(h, 0), input_height-1);
-            w = min(max(w, 0), input_width-1); 
+            int cur_h = min(max(h, 0), input_height-1);
+            int cur_w = min(max(w, 0), input_width-1); 
             
-            DType input_value = input_data_cur[h * input_width + w];
-            DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));
+            DType input_value = input_data_cur[cur_h * input_width + cur_w];
+            DType kernel_value = alpha * triangleCoeff(alpha * (ih - cur_h)) * alpha * triangleCoeff(alpha * (iw - cur_w));
             
             kernel_sum += input_value * kernel_value;
         }
@@ -124,11 +124,11 @@ __global__ void BilinearDownsampleBackward(const int n, float rescale,
 
     for (int h = ih_round - radius; h <= ih_round + radius; h++) {
         for (int w = iw_round - radius; w <= iw_round + radius; w++) {
-            h = min(max(h, 0), input_height-1);
-            w = min(max(w, 0), input_width-1); 
+            int cur_h = min(max(h, 0), input_height-1);
+            int cur_w = min(max(w, 0), input_width-1); 
             
-            DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));          
-            atomicAdd(input_grad_cur + h * input_width + w, output_grad_value * kernel_value);
+            DType kernel_value = alpha * triangleCoeff(alpha * (ih - cur_h)) * alpha * triangleCoeff(alpha * (iw - cur_w));          
+            atomicAdd(input_grad_cur + cur_h * input_width + cur_w, output_grad_value * kernel_value);
         }
     }
   }
