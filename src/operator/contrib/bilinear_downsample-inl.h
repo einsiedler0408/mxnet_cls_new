@@ -53,9 +53,12 @@ enum BilinearDownsampleForwardResource {kTempResource};
 
 struct BilinearDownsampleParam : public dmlc::Parameter<BilinearDownsampleParam> {
   float rescale;
+  float kernel_radius;
   DMLC_DECLARE_PARAMETER(BilinearDownsampleParam) {
     DMLC_DECLARE_FIELD(rescale).set_default(2.0f).set_range(1.0f, 10000.0f)
     .describe("BilinearDownsample scale");
+    DMLC_DECLARE_FIELD(kernel_radius).set_default(2.0f).set_range(1.0f, 10000.0f)
+    .describe("BilinearDownsample kernel_radius");
   }
 };
 
@@ -81,7 +84,7 @@ class BilinearDownsampleProp : public OperatorProperty {
     const TShape &dshape = in_shape->at(bilinear_downsample::kData);
     if (dshape.ndim() == 0) return false;
     
-    Shape<4> output_shape = Shape4(dshape[0], dshape[1], int((dshape[2]-1)/param_.rescale)+1, int((dshape[3]-1)/param_.rescale)+1);
+    Shape<4> output_shape = Shape4(dshape[0], dshape[1], int((dshape[2]-0.5)/param_.rescale+1), int((dshape[3]-0.5)/param_.rescale+1));
     out_shape->clear();
     out_shape->push_back(output_shape);
     return true;

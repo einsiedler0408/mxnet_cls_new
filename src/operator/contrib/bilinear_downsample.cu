@@ -58,7 +58,7 @@ static __device__ __forceinline__ float triangleCoeff(float x)
 }
 
 template <typename DType>
-__global__ void BilinearDownsampleForward(const int n, float rescale,
+__global__ void BilinearDownsampleForward(const int n, float rescale, float kernel_radius,
                                       const DType* input_data, const int input_spatial_dim,
                                       const int input_height, const int input_width,
                                       DType* output_data, const int output_spatial_dim,
@@ -75,30 +75,32 @@ __global__ void BilinearDownsampleForward(const int n, float rescale,
     int ih_round = round(ih);
     int iw_round = round(iw);
     
-    float alpha = 1.0f / rescale;
-    int radius = ceil(rescale);
+    float alpha = 1.0f / kernel_radius;
+    int radius = round(kernel_radius); // floor(kernel_radius + 0.5)
     
+    DType output_sum = 0;
     DType kernel_sum = 0;
     const DType* input_data_cur = input_data + bc * input_spatial_dim;
-
+    
     for (int h = ih_round - radius; h <= ih_round + radius; h++) {
         for (int w = iw_round - radius; w <= iw_round + radius; w++) {
-            int cur_h = min(max(h, 0), input_height-1);
-            int cur_w = min(max(w, 0), input_width-1); 
+            if (h < 0 || h > input_height-1 || w < 0 || w > input_width-1)
+                continue;
             
-            DType input_value = input_data_cur[cur_h * input_width + cur_w];
+            DType input_value = input_data_cur[h * input_width + w];
             DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));
             
-            kernel_sum += input_value * kernel_value;
+            output_sum += input_value * kernel_value;
+            kernel_sum += kernel_value;
         }
     }
     
-    output_data[index] += kernel_sum; 
+    output_data[index] += output_sum / kernel_sum; 
   }
 }
 
 template <typename DType>
-__global__ void BilinearDownsampleBackward(const int n, float rescale,
+__global__ void BilinearDownsampleBackward(const int n, float rescale, float kernel_radius,
                                       DType* input_grad, const int input_spatial_dim,
                                       const int input_height, const int input_width,
                                       const DType* output_grad, const int output_spatial_dim,
@@ -116,19 +118,27 @@ __global__ void BilinearDownsampleBackward(const int n, float rescale,
     int ih_round = round(ih);
     int iw_round = round(iw);
     
-    float alpha = 1.0f / rescale;
-    int radius = ceil(rescale);
+    float alpha = 1.0f / kernel_radius;
+    int radius = round(kernel_radius); // floor(kernel_radius + 0.5)
+    
+    DType kernel_sum = 0;
+    for (int h = ih_round - radius; h <= ih_round + radius; h++) {
+        for (int w = iw_round - radius; w <= iw_round + radius; w++) {
+            if (h < 0 || h > input_height-1 || w < 0 || w > input_width-1)
+                continue;  
+            DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));
+            kernel_sum += kernel_value;
+        }
+    }
     
     DType output_grad_value = output_grad[index];
     DType* input_grad_cur = input_grad + bc * input_spatial_dim;
-
     for (int h = ih_round - radius; h <= ih_round + radius; h++) {
         for (int w = iw_round - radius; w <= iw_round + radius; w++) {
-            int cur_h = min(max(h, 0), input_height-1);
-            int cur_w = min(max(w, 0), input_width-1); 
-            
-            DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));          
-            atomicAdd(input_grad_cur + cur_h * input_width + cur_w, output_grad_value * kernel_value);
+            if (h < 0 || h > input_height-1 || w < 0 || w > input_width-1)
+                continue;
+            DType kernel_value = alpha * triangleCoeff(alpha * (ih - h)) * alpha * triangleCoeff(alpha * (iw - w));
+            atomicAdd(input_grad_cur + h * input_width + w, output_grad_value * kernel_value / kernel_sum);
         }
     }
   }
@@ -178,7 +188,7 @@ class BilinearDownsampleGPUOp : public Operator{
     using namespace mxnet_op;
     BilinearDownsampleForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, param_.rescale, input_data.dptr_, input_height * input_width, input_height, input_width,
+          (num_kernels, param_.rescale, param_.kernel_radius, input_data.dptr_, input_height * input_width, input_height, input_width,
           output_data.dptr_, output_height * output_width, output_height, output_width);
     MSHADOW_CUDA_POST_KERNEL_CHECK(BilinearDownsampleForward);
     
@@ -214,7 +224,7 @@ class BilinearDownsampleGPUOp : public Operator{
     using namespace mxnet_op;
     BilinearDownsampleBackward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, param_.rescale, input_grad.dptr_, input_height * input_width, input_height, input_width,
+          (num_kernels, param_.rescale, param_.kernel_radius, input_grad.dptr_, input_height * input_width, input_height, input_width,
           output_grad.dptr_, output_height * output_width, output_height, output_width);
     MSHADOW_CUDA_POST_KERNEL_CHECK(BilinearDownsampleBackward);
   }
