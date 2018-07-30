@@ -54,11 +54,14 @@ enum DownsampleForwardResource {kTempResource};
 struct DownsampleParam : public dmlc::Parameter<DownsampleParam> {
   bool backward_kernel;
   int rescale;
+  int dilate;
   DMLC_DECLARE_PARAMETER(DownsampleParam) {
     DMLC_DECLARE_FIELD(backward_kernel).set_default(false)
     .describe("Whether backward to kernel");
     DMLC_DECLARE_FIELD(rescale).set_default(2)
     .describe("Downsample scale");
+    DMLC_DECLARE_FIELD(dilate).set_default(1)
+    .describe("Downsample dilate");
   }
 };
 
