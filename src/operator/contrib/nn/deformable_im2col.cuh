@@ -75,6 +75,33 @@ namespace mxnet {
 namespace op {
 
 template <typename DType>
+__global__ void nchw2nhwc_kernel(const int n, const DType* data_in,
+                                 const int spatial_dim, const int channels,
+                                 DType* data_out) {
+  CUDA_KERNEL_LOOP(index, n) {
+    const int s = index % spatial_dim;
+    const int nc = index / spatial_dim;
+    const int n = nc / channels;
+    const int c = nc % channels;
+    data_out[(n * spatial_dim + s) * channels + c] = data_in[index];
+  }
+}
+
+template <typename DType>
+__global__ void nhwc2nchw_kernel(const int n, const DType* data_in,
+                                 const int spatial_dim, const int channels,
+                                 DType* data_out) {
+  CUDA_KERNEL_LOOP(index, n) {
+    const int c = index % channels;
+    const int ns = index / channels;
+    const int n = ns / spatial_dim;
+    const int s = ns % spatial_dim;
+    data_out[(n * channels + c) * spatial_dim + s] = data_in[index];
+  }
+}
+
+
+template <typename DType>
 __device__ DType deformable_im2col_bilinear(const DType* bottom_data, const int data_width,
   const int height, const int width, DType h, DType w) {
 
