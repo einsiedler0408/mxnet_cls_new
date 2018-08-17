@@ -34,7 +34,8 @@ bool between(DType value, int lowerBound, int upperBound) {
 template<typename DType>
 inline void BilinearSamplerForward(const Tensor<cpu, 4, DType> &output,
                                     const Tensor<cpu, 4, DType> &input,
-                                    const Tensor<cpu, 4, DType> &grid_src) {
+                                    const Tensor<cpu, 4, DType> &grid_src,
+                                    const bool out_zero) {
   DType *out = output.dptr_;
   const DType *data = input.dptr_;
   const DType *grid = grid_src.dptr_;
@@ -48,6 +49,12 @@ inline void BilinearSamplerForward(const Tensor<cpu, 4, DType> &output,
           index_t grid_index = n * o_h * o_w * 2 + h * o_w + w;
           DType y_real = (*(grid + grid_index + o_h * o_w) + 1) * (i_h - 1) / 2;
           DType x_real = (*(grid + grid_index) + 1) * (i_w - 1) / 2;
+          
+          if (out_zero && (x_real < 0 || x_real > i_w-1 || y_real < 0 || y_real > i_h - 1)){
+            *(out+out_index) = 0;
+            continue;
+          }
+          
           int top_left_y = static_cast<int>(floor(y_real));
           int top_left_x = static_cast<int>(floor(x_real));
           DType top_left_y_w = 1.0 - (y_real - top_left_y);
@@ -81,7 +88,8 @@ inline void BilinearSamplerBackward(const Tensor<cpu, 4, DType> &gdata,
                                      const Tensor<cpu, 4, DType> &ggrid,
                                      const Tensor<cpu, 4, DType> &output_grad,
                                      const Tensor<cpu, 4, DType> &input_data,
-                                     const Tensor<cpu, 4, DType> &grid) {
+                                     const Tensor<cpu, 4, DType> &grid,
+                                     const bool out_zero) {
   DType *g_input = gdata.dptr_;
   DType *grad_grid = ggrid.dptr_;
   const DType *grid_src = grid.dptr_;
@@ -98,6 +106,11 @@ inline void BilinearSamplerBackward(const Tensor<cpu, 4, DType> &gdata,
           index_t grid_src_index = n * o_h * o_w * 2 + h * o_w + w;
           DType y_real = (*(grid_src + grid_src_index + o_h * o_w) + 1) * (i_h - 1) / 2;
           DType x_real = (*(grid_src + grid_src_index) + 1) * (i_w - 1) / 2;
+          
+          if (out_zero && (x_real < 0 || x_real > i_w-1 || y_real < 0 || y_real > i_h - 1)){
+            continue;
+          }
+          
           int top_left_y = static_cast<int>(floor(y_real));
           int top_left_x = static_cast<int>(floor(x_real));
           DType top_left_y_w = 1.0 - (y_real - top_left_y);

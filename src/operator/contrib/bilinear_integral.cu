@@ -55,7 +55,7 @@ static __device__ __forceinline__ bool between(float value, int lowerBound, int 
 }
 
 template <typename DType>
-__global__ void BilinearIntegralForward(const int n, const int channels,
+__global__ void BilinearIntegralForward(const int n, const bool out_zero, const int channels,
                                       const DType* input_data, const DType* input_offset,
                                       const int input_spatial_dim, 
                                       const int input_height, const int input_width,
@@ -72,6 +72,9 @@ __global__ void BilinearIntegralForward(const int n, const int channels,
 
     float iw = ow + input_offset[n * 2 * output_spatial_dim + os];
     float ih = oh + input_offset[n * 2 * output_spatial_dim + os + output_spatial_dim];
+    
+    if (out_zero && (iw < 0 || iw > input_width-1 || ih < 0 || ih > input_height - 1))
+        continue;
     
     int iw_round = round(iw);
     int ih_round = round(ih);
@@ -125,7 +128,7 @@ __global__ void BilinearIntegralForward(const int n, const int channels,
 }
 
 template <typename DType>
-__global__ void BilinearIntegralBackward(const int n, const int channels,
+__global__ void BilinearIntegralBackward(const int n, const bool out_zero, const int channels,
                                       const DType* input_data, const DType* input_offset,
                                       const int input_spatial_dim, 
                                       const int input_height, const int input_width,
@@ -141,6 +144,9 @@ __global__ void BilinearIntegralBackward(const int n, const int channels,
 
     float iw = ow + input_offset[n * 2 * output_spatial_dim + os];
     float ih = oh + input_offset[n * 2 * output_spatial_dim + os + output_spatial_dim];
+    
+    if (out_zero && (iw < 0 || iw > input_width-1 || ih < 0 || ih > input_height - 1))
+        continue;
     
     int iw_round = round(iw);
     int ih_round = round(ih);
@@ -286,7 +292,7 @@ class BilinearIntegralGPUOp : public Operator{
     using namespace mxnet_op;
     BilinearIntegralForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, channel_num,
+          (num_kernels, param_.out_zero, channel_num,
           input_data.dptr_, input_offset.dptr_,
           input_height*input_width, input_height, input_width,
           output_data.dptr_,
@@ -332,7 +338,7 @@ class BilinearIntegralGPUOp : public Operator{
     using namespace mxnet_op;
     BilinearIntegralBackward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, channel_num,
+          (num_kernels, param_.out_zero, channel_num,
           input_data.dptr_, input_offset.dptr_,
           input_height*input_width, input_height, input_width,
           output_grad.dptr_,

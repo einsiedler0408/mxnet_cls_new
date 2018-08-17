@@ -44,7 +44,10 @@ enum BilinearSamplerOpOutputs {kOut, kTmp};
 }
 
 struct BilinearSamplerParam : public dmlc::Parameter<BilinearSamplerParam> {
+  bool out_zero;
   DMLC_DECLARE_PARAMETER(BilinearSamplerParam) {
+    DMLC_DECLARE_FIELD(out_zero).set_default(false)
+    .describe("BilinearSampler out_zero");
   }
 };
 
@@ -70,7 +73,7 @@ class BilinearSamplerOp : public Operator {
     Tensor<xpu, 4, DType> grid = in_data[bs::kGrid].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> out = out_data[bs::kOut].get<xpu, 4, DType>(s);
 
-    BilinearSamplerForward(out, data, grid);
+    BilinearSamplerForward(out, data, grid, param_.out_zero);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -99,7 +102,7 @@ class BilinearSamplerOp : public Operator {
       if (req[bs::kGrid] == kWriteTo) {
         ggrid = scalar<DType>(0.0f);
       }
-      BilinearSamplerBackward(gdata, ggrid, grad, data, grid);
+      BilinearSamplerBackward(gdata, ggrid, grad, data, grid, param_.out_zero);
     } else if (req[bs::kData] == kNullOp && req[bs::kGrid] == kNullOp) {
       return;
     } else {

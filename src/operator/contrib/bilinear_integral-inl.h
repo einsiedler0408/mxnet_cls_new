@@ -52,7 +52,10 @@ enum BilinearIntegralForwardResource {kTempResource};
 }  // bilinear_integral
 
 struct BilinearIntegralParam : public dmlc::Parameter<BilinearIntegralParam> {
+  bool out_zero;
   DMLC_DECLARE_PARAMETER(BilinearIntegralParam) {
+    DMLC_DECLARE_FIELD(out_zero).set_default(false)
+    .describe("BilinearIntegral out_zero");
   }
 };
 
