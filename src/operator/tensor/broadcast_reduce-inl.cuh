@@ -489,6 +489,148 @@ ReduceImplConfig<ndim> ConfigureReduceImpl(const TBlob& small, const TBlob& big,
   return config;
 }
 
+template<int ndim, typename DType>
+ReduceImplConfig<ndim> ConfigureReduceImpl(const TShape& small, const TShape& big, const TShape* lhs,
+  const TShape* rhs) {
+
+  ReduceImplConfig<ndim> config;
+
+  diff(small.get<ndim>(), big.get<ndim>(), &config.rshape, &config.rstride);
+  config.N = small.Size();
+  config.M = config.rshape.Size();
+
+  bool multiOp = false;
+  if (lhs != NULL) {
+    CHECK_NOTNULL(rhs);
+    diff(small.get<ndim>(), lhs->get<ndim>(), &config.lhs_shape,
+      &config.lhs_stride);
+    diff(small.get<ndim>(), rhs->get<ndim>(), &config.rhs_shape,
+      &config.rhs_stride);
+    multiOp = true;
+  }
+
+  config.workspace_size = 0;
+
+  if (config.M == 1) {
+    config.kernel_1.blockDim.x = kMaxThreadsPerBlock;
+    config.kernel_1.gridDim.x = std::min((unsigned int)kBaseGridNum,
+      (config.N + config.kernel_1.blockDim.x - 1)/config.kernel_1.blockDim.x);
+  } else {
+
+    int reduce_strides[3];
+    reduce_strides[0] = fastest_stride(small.get<ndim>(), big.get<ndim>(),
+      big.get<ndim>());
+    reduce_strides[1] = (multiOp) ? fastest_stride(small.get<ndim>(),
+      lhs->get<ndim>(), lhs->get<ndim>()) : 1;
+    reduce_strides[2] = (multiOp) ? fastest_stride(small.get<ndim>(),
+      rhs->get<ndim>(), rhs->get<ndim>()) : 1;
+
+    int reduce_strides_transp[3];
+    reduce_strides_transp[0] = fastest_stride(small.get<ndim>(), config.rshape,
+      config.rstride);
+    reduce_strides_transp[1] = (multiOp) ?
+      fastest_stride(small.get<ndim>(), config.lhs_shape, config.lhs_stride) : 1;
+    reduce_strides_transp[2] = (multiOp) ?
+      fastest_stride(small.get<ndim>(), config.rhs_shape, config.rhs_stride) : 1;
+
+    uint64_t num_load = calc_num_load(config.N, config.M, reduce_strides);
+    uint64_t num_load_transp = calc_num_load(config.M, config.N, reduce_strides_transp);
+
+    config.Mnext = 1;
+    config.kernel_1.do_transpose = (num_load > num_load_transp);
+
+    config.kernel_1.blockDim.x = 0;
+    config.kernel_1.blockDim.y = 0;
+
+    if (config.kernel_1.do_transpose) {
+      // Fastest thread ID goes through M
+      // Loop over N has step size config.kernel_1.blockDim.y
+      if (config.N < 8) {
+        config.kernel_1.blockDim.y = 1;
+      } else if (config.N < 256) {
+        config.kernel_1.blockDim.y = 4;
+      } else {
+        if (config.M < 8) {
+          config.kernel_1.blockDim.x = 1;
+        } else if (config.M < 256) {
+          config.kernel_1.blockDim.x = 4;
+        } else {
+          config.kernel_1.blockDim.x = config.warpSize;
+        }
+      }
+    } else {
+      // Fastest thread ID goes through N
+      // Loop over M has step size config.kernel_1.blockDim.y
+      if (config.M < 8) {
+        config.kernel_1.blockDim.y = 1;
+      } else if (config.M < 256) {
+        config.kernel_1.blockDim.y = 4;
+      } else {
+        if (config.N < 8) {
+          config.kernel_1.blockDim.x = 1;
+        } else if (config.N < 256) {
+          config.kernel_1.blockDim.x = 4;
+        } else {
+          config.kernel_1.blockDim.x = config.warpSize;
+        }
+      }
+    }
+
+    if (config.kernel_1.blockDim.x == 0 && config.kernel_1.blockDim.y == 0) {
+      LOG(FATAL) << "Unable to set blockDim";
+    } else if (config.kernel_1.blockDim.x == 0) {
+      config.kernel_1.blockDim.x = nthread_reduce / config.kernel_1.blockDim.y;
+    } else if (config.kernel_1.blockDim.y == 0) {
+      config.kernel_1.blockDim.y = nthread_reduce / config.kernel_1.blockDim.x;
+    }
+
+    if (config.kernel_1.do_transpose) {
+      // Fastest thread ID goes through M
+      config.kernel_1.gridDim.x = std::min((unsigned int)kBaseGridNum,
+        ceil_idiv<unsigned int>(config.N, config.kernel_1.blockDim.y));
+      config.kernel_1.gridDim.y = std::min(kBaseGridNum, config.Mnext);
+      int by = config.kernel_1.blockDim.y;
+      if (config.kernel_1.blockDim.y % config.warpSize == 0) {
+        // Fix shared memory bank conflict
+        by++;
+      }
+      config.kernel_1.shMemSize = (config.kernel_1.blockDim.x > 1) ?
+        config.kernel_1.blockDim.x*by*sizeof(DType) * 2 : 0;
+      // Maximum number of times we want TB to loop in M
+      // Max size of M-block each TB can handle
+      int maxMblock = config.kernel_1.blockDim.x*config.maxLoopPerTB;
+      config.Mnext = (config.M + maxMblock - 1) / maxMblock;
+    } else {
+      // Fastest thread ID goes through N
+      config.kernel_1.gridDim.x = std::min((unsigned int)kBaseGridNum,
+        ceil_idiv<unsigned int>(config.N, config.kernel_1.blockDim.x));
+      config.kernel_1.gridDim.y = std::min(kBaseGridNum, config.Mnext);
+      config.kernel_1.shMemSize = (config.kernel_1.blockDim.y > 1) ?
+        config.kernel_1.blockDim.x*config.kernel_1.blockDim.y*sizeof(DType) * 2 : 0;
+      // Maximum number of times we want TB to loop in M
+      // Max size of M-block each TB can handle
+      int maxMblock = config.kernel_1.blockDim.y*config.maxLoopPerTB;
+      config.Mnext = (config.M + maxMblock - 1) / maxMblock;
+    }
+
+    if (config.Mnext > 1) {
+      // small_dptr[] is N*Mnext*sizeof(DType) bytes
+      config.workspace_size += config.N*config.Mnext*sizeof(DType);
+      // Set gridDim.y to Mnext
+      config.kernel_1.gridDim.y = std::min(kBaseGridNum, config.Mnext);
+    }
+
+    if (config.Mnext > 1) {
+      config.kernel_2.blockSize = kMaxThreadsPerBlock;
+      config.kernel_2.gridSize = std::min((int)kBaseGridNum,
+        (config.N + config.kernel_2.blockSize - 1)/config.kernel_2.blockSize );
+    }
+
+  }
+
+  return config;
+}
+
 #define KERNEL_UNROLL_SWITCH(do_unroll, unrollAmount, unrollVar, ...) \
   if (do_unroll) {                                                    \
     const int unrollVar = unrollAmount;                               \
@@ -616,6 +758,22 @@ size_t ReduceWorkspaceSize(Stream<gpu> *s, const TBlob& small, const OpReqType r
 template<int ndim, typename DType>
 size_t ReduceWorkspaceSize(Stream<gpu> *s, const TBlob& small, const OpReqType req,
                            const TBlob& big, const TBlob& lhs, const TBlob& rhs) {
+  if (req == kNullOp) return 0;
+  ReduceImplConfig<ndim> config = ConfigureReduceImpl<ndim, DType>(small, big, &lhs, &rhs);
+  return config.workspace_size;
+}
+
+template<int ndim, typename DType>
+size_t ReduceWorkspaceSize(Stream<gpu> *s, const TShape& small, const OpReqType req,
+                           const TShape& big) {
+  if (req == kNullOp) return 0;
+  ReduceImplConfig<ndim> config = ConfigureReduceImpl<ndim, DType>(small, big, NULL, NULL);
+  return config.workspace_size;
+}
+
+template<int ndim, typename DType>
+size_t ReduceWorkspaceSize(Stream<gpu> *s, const TShape& small, const OpReqType req,
+                           const TShape& big, const TShape& lhs, const TShape& rhs) {
   if (req == kNullOp) return 0;
   ReduceImplConfig<ndim> config = ConfigureReduceImpl<ndim, DType>(small, big, &lhs, &rhs);
   return config.workspace_size;

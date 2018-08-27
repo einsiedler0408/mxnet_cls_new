@@ -228,6 +228,18 @@ size_t ReduceWorkspaceSize(Stream<cpu> *s, const TBlob& small, const OpReqType r
   return 0;
 }
 
+template<int ndim, typename DType>
+size_t ReduceWorkspaceSize(Stream<cpu> *s, const TShape& small, const OpReqType req,
+                           const TShape& big) {
+  return 0;
+}
+
+template<int ndim, typename DType>
+size_t ReduceWorkspaceSize(Stream<cpu> *s, const TShape& small, const OpReqType req,
+                           const TShape& big, const TShape& lhs, const TShape& rhs) {
+  return 0;
+}
+
 template<typename Reducer, int ndim, typename DType, typename OP1, typename OP2>
 MSHADOW_XINLINE void seq_reduce_assign(const int idx, const int M, const bool addto,
                                        const DType* __restrict big, const DType* __restrict lhs,
