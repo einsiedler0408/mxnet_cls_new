@@ -84,6 +84,7 @@ namespace cuda {
     const int part_size,
     const int num_classes,
     const int channels_each_class,
+    const bool left_top_alignment,
     DType* top_data,
     DType* top_count) {
     CUDA_KERNEL_LOOP(index, count) {
@@ -96,15 +97,24 @@ namespace cuda {
       // [start, end) interval for spatial sampling
       const DType* offset_bottom_rois = bottom_rois + n * 5;
       int roi_batch_ind = offset_bottom_rois[0];
-      DType roi_start_w = static_cast<DType>(round(offset_bottom_rois[1])) * spatial_scale - 0.5;
-      DType roi_start_h = static_cast<DType>(round(offset_bottom_rois[2])) * spatial_scale - 0.5;
-      DType roi_end_w = static_cast<DType>(round(offset_bottom_rois[3]) + 1.) * spatial_scale - 0.5;
-      DType roi_end_h = static_cast<DType>(round(offset_bottom_rois[4]) + 1.) * spatial_scale - 0.5;
+      
+      DType roi_start_w, roi_start_h, roi_end_w, roi_end_h;
+      if (left_top_alignment) {
+          roi_start_w = (offset_bottom_rois[1]-0.5) * spatial_scale;
+          roi_start_h = (offset_bottom_rois[2]-0.5) * spatial_scale;
+          roi_end_w = (offset_bottom_rois[3]+0.5) * spatial_scale;
+          roi_end_h = (offset_bottom_rois[4]+0.5) * spatial_scale;
+      } else {
+          roi_start_w = static_cast<DType>(round(offset_bottom_rois[1])) * spatial_scale - 0.5;
+          roi_start_h = static_cast<DType>(round(offset_bottom_rois[2])) * spatial_scale - 0.5;
+          roi_end_w = static_cast<DType>(round(offset_bottom_rois[3]) + 1.) * spatial_scale - 0.5;
+          roi_end_h = static_cast<DType>(round(offset_bottom_rois[4]) + 1.) * spatial_scale - 0.5;
+      }     
 
       // Force too small ROIs to be 1x1
       DType roi_width = max(roi_end_w - roi_start_w, 0.1);  // avoid 0
       DType roi_height = max(roi_end_h - roi_start_h, 0.1);
-
+      
       // Compute w and h at bottom
       DType bin_size_h = roi_height / static_cast<DType>(pooled_height);
       DType bin_size_w = roi_width / static_cast<DType>(pooled_width);
@@ -173,7 +183,8 @@ namespace cuda {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     // LOG(INFO) << "DeformablePSROIPoolForward";
     const DType *bottom_data = data.dptr_;
     const DType *bottom_rois = bbox.dptr_;
@@ -194,7 +205,7 @@ namespace cuda {
       kBaseThreadNum, 0, stream >> >(
       count, bottom_data, spatial_scale, channels, height, width, pooled_height, pooled_width,
       bottom_rois, bottom_trans, no_trans, trans_std, sample_per_part, output_dim,
-      group_size, part_size, num_classes, channels_each_class, top_data, top_count_data);
+      group_size, part_size, num_classes, channels_each_class, left_top_alignment, top_data, top_count_data);
     DeformablePSROIPOOLING_CUDA_CHECK(cudaPeekAtLastError());
   }
 
@@ -220,7 +231,8 @@ namespace cuda {
     const int group_size,
     const int part_size,
     const int num_classes,
-    const int channels_each_class) {
+    const int channels_each_class,
+    const bool left_top_alignment) {
     CUDA_KERNEL_LOOP(index, count) {
       // The output is in order (n, ctop, ph, pw)
       int pw = index % pooled_width;
@@ -231,10 +243,19 @@ namespace cuda {
       // [start, end) interval for spatial sampling
       const DType* offset_bottom_rois = bottom_rois + n * 5;
       int roi_batch_ind = offset_bottom_rois[0];
-      DType roi_start_w = static_cast<DType>(round(offset_bottom_rois[1])) * spatial_scale - 0.5;
-      DType roi_start_h = static_cast<DType>(round(offset_bottom_rois[2])) * spatial_scale - 0.5;
-      DType roi_end_w = static_cast<DType>(round(offset_bottom_rois[3]) + 1.) * spatial_scale - 0.5;
-      DType roi_end_h = static_cast<DType>(round(offset_bottom_rois[4]) + 1.) * spatial_scale - 0.5;
+      
+      DType roi_start_w, roi_start_h, roi_end_w, roi_end_h;
+      if (left_top_alignment) {
+          roi_start_w = (offset_bottom_rois[1]-0.5) * spatial_scale;
+          roi_start_h = (offset_bottom_rois[2]-0.5) * spatial_scale;
+          roi_end_w = (offset_bottom_rois[3]+0.5) * spatial_scale;
+          roi_end_h = (offset_bottom_rois[4]+0.5) * spatial_scale;
+      } else {
+          roi_start_w = static_cast<DType>(round(offset_bottom_rois[1])) * spatial_scale - 0.5;
+          roi_start_h = static_cast<DType>(round(offset_bottom_rois[2])) * spatial_scale - 0.5;
+          roi_end_w = static_cast<DType>(round(offset_bottom_rois[3]) + 1.) * spatial_scale - 0.5;
+          roi_end_h = static_cast<DType>(round(offset_bottom_rois[4]) + 1.) * spatial_scale - 0.5;
+      }    
 
       // Force too small ROIs to be 1x1
       DType roi_width = max(roi_end_w - roi_start_w, 0.1);  // avoid 0
@@ -345,7 +366,8 @@ namespace cuda {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     // LOG(INFO) << "DeformablePSROIPoolBackward";
     const DType *top_diff = out_grad.dptr_;
     const DType *bottom_data = data.dptr_;
@@ -370,7 +392,7 @@ namespace cuda {
       count, top_diff, top_count_data, num_rois, spatial_scale, channels, height, width,
       pooled_height, pooled_width, output_dim, bottom_data_diff, bottom_trans_diff,
       bottom_data, bottom_rois, bottom_trans, no_trans, trans_std, sample_per_part,
-      group_size, part_size, num_classes, channels_each_class);
+      group_size, part_size, num_classes, channels_each_class, left_top_alignment);
     DeformablePSROIPOOLING_CUDA_CHECK(cudaPeekAtLastError());
   }
 
@@ -389,9 +411,10 @@ namespace cuda {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     cuda::DeformablePSROIPoolForward(out, data, bbox, trans, top_count, no_trans, spatial_scale,
-      output_dim, group_size, pooled_size, part_size, sample_per_part, trans_std);
+      output_dim, group_size, pooled_size, part_size, sample_per_part, trans_std, left_top_alignment);
   }
 
   template<typename DType>
@@ -409,10 +432,11 @@ namespace cuda {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     cuda::DeformablePSROIPoolBackwardAcc(in_grad, trans_grad, out_grad, data, bbox, trans,
       top_count, no_trans, spatial_scale, output_dim, group_size, pooled_size, part_size,
-      sample_per_part, trans_std);
+      sample_per_part, trans_std, left_top_alignment);
   }
 
 }  // namespace mshadow

@@ -20,14 +20,14 @@
 /*!
  * Copyright (c) 2017 Microsoft
  * Licensed under The Apache-2.0 License [see LICENSE for details]
- * \file deformable_convolution-inl.h
+ * \file deformable_masked_convolution-inl.h
  * \brief
  * \ref: https://github.com/Yangqing/caffe/wiki/Convolution-in-Caffe:-a-memo
  * \ref: https://arxiv.org/abs/1703.06211
  * \author Yuwen Xiong, Haozhi Qi, Jifeng Dai
 */
-#ifndef MXNET_OPERATOR_CONTRIB_DEFORMABLE_CONVOLUTION_INL_H_
-#define MXNET_OPERATOR_CONTRIB_DEFORMABLE_CONVOLUTION_INL_H_
+#ifndef MXNET_OPERATOR_CONTRIB_DEFORMABLE_MASKED_CONVOLUTION_INL_H_
+#define MXNET_OPERATOR_CONTRIB_DEFORMABLE_MASKED_CONVOLUTION_INL_H_
 
 #include <mxnet/io.h>
 #include <mxnet/base.h>
@@ -43,20 +43,20 @@
 #include <utility>
 #include "../operator_common.h"
 #include "../nn/im2col.h"
-#include "./nn/deformable_im2col.h"
+#include "./nn/deformable_masked_im2col.h"
 #include "../linalg.h"
 
 
 namespace mxnet {
 namespace op {
 
-namespace conv {
-  enum DeformableConvolutionOpInputs { kData, kOffset, kWeight, kBias };
-  enum DeformableConvolutionOpOutputs { kOut };
-  enum DeformableConvolutionOpResource { kTempSpace };
+namespace dmconv {
+  enum DeformableMaskedConvolutionOpInputs { kData, kOffset, kMask, kWeight, kBias };
+  enum DeformableMaskedConvolutionOpOutputs { kOut };
+  enum DeformableMaskedConvolutionOpResource { kTempSpace };
 }
 
-struct DeformableConvolutionParam : public dmlc::Parameter<DeformableConvolutionParam> {
+struct DeformableMaskedConvolutionParam : public dmlc::Parameter<DeformableMaskedConvolutionParam> {
   TShape kernel;
   TShape stride;
   TShape dilate;
@@ -67,7 +67,7 @@ struct DeformableConvolutionParam : public dmlc::Parameter<DeformableConvolution
   uint64_t workspace;
   bool no_bias;
   dmlc::optional<int> layout;
-  DMLC_DECLARE_PARAMETER(DeformableConvolutionParam) {
+  DMLC_DECLARE_PARAMETER(DeformableMaskedConvolutionParam) {
     DMLC_DECLARE_FIELD(kernel).describe("Convolution kernel size: (h, w) or (d, h, w)");
     DMLC_DECLARE_FIELD(stride).set_default(TShape())
       .describe("Convolution stride: (h, w) or (d, h, w). Defaults to 1 for each dimension.");
@@ -96,9 +96,9 @@ struct DeformableConvolutionParam : public dmlc::Parameter<DeformableConvolution
 };
 
 template<typename xpu, typename DType>
-class DeformableConvolutionOp : public Operator {
+class DeformableMaskedConvolutionOp : public Operator {
  public:
-  explicit DeformableConvolutionOp(DeformableConvolutionParam p) {
+  explicit DeformableMaskedConvolutionOp(DeformableMaskedConvolutionParam p) {
     this->param_ = p;
     // convert MBytes first to Bytes and then to elements.
     param_.workspace = (param_.workspace << 20) / sizeof(DType);
@@ -115,16 +115,17 @@ class DeformableConvolutionOp : public Operator {
     const std::vector<TBlob> &aux_args) {
     using namespace mshadow;
     using namespace mshadow::expr;
-    CHECK_EQ(req[conv::kOut], kWriteTo);
-    size_t expected = param_.no_bias ? 3 : 4;
+    CHECK_EQ(req[dmconv::kOut], kWriteTo);
+    size_t expected = param_.no_bias ? 4 : 5;
     CHECK_EQ(in_data.size(), expected);
     CHECK_EQ(out_data.size(), 1U);
-    LayerSetUp(in_data[conv::kData].shape_,
-               in_data[conv::kOffset].shape_,
-               out_data[conv::kOut].shape_);
+    LayerSetUp(in_data[dmconv::kData].shape_,
+               in_data[dmconv::kOffset].shape_,
+               in_data[dmconv::kMask].shape_,
+               out_data[dmconv::kOut].shape_);
     Stream<xpu>* s = ctx.get_stream<xpu>();
     // allocate workspace for col_buffer
-    Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
+    Tensor<xpu, 1, DType> workspace = ctx.requested[dmconv::kTempSpace]
       .get_space_typed<xpu, 1, DType>(Shape1(col_buffer_size_), s);
     // calculate the shape of col_buffer
     TShape col_buffer_shape(num_spatial_axes_ + 1);
@@ -139,28 +140,29 @@ class DeformableConvolutionOp : public Operator {
     index_t M = conv_out_channels_ / group_;
     index_t N = conv_out_spatial_dim_;
     index_t K = kernel_dim_;
-    Tensor<xpu, 3, DType> weight_3d = in_data[conv::kWeight].get_with_shape<xpu, 3, DType>(
+    Tensor<xpu, 3, DType> weight_3d = in_data[dmconv::kWeight].get_with_shape<xpu, 3, DType>(
       Shape3(group_, M, K), s);
     Tensor<xpu, 3, DType> col_buffer_3d = col_buffer.get_with_shape<xpu, 3, DType>(
       Shape3(group_, K, N), s);
-    Tensor<xpu, 4, DType> output_4d = out_data[conv::kOut].get_with_shape<xpu, 4, DType>(
+    Tensor<xpu, 4, DType> output_4d = out_data[dmconv::kOut].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, M, N), s);
     for (index_t n = 0; n < num_; ++n) {
       // transform image to col_buffer in order to use gemm
-      deformable_im2col(s, in_data[conv::kData].dptr<DType>() + n*input_dim_,
-        in_data[conv::kOffset].dptr<DType>() + n*input_offset_dim_, in_data[conv::kData].shape_,
+      deformable_masked_im2col(s, in_data[dmconv::kData].dptr<DType>() + n*input_dim_,
+        in_data[dmconv::kOffset].dptr<DType>() + n*input_offset_dim_,
+        in_data[dmconv::kMask].dptr<DType>() + n*input_mask_dim_, in_data[dmconv::kData].shape_,
         col_buffer.shape_, param_.kernel, param_.pad, param_.stride, param_.dilate,
         param_.num_deformable_group, col_buffer.dptr<DType>());
       Tensor<xpu, 3, DType> output_3d = output_4d[n];
       for (index_t g = 0; g < group_; ++g) {
         // Legacy approach shown here for comparison:
-        //   Assign(output_3d[g], req[conv::kOut], dot(weight_3d[g], col_buffer_3d[g]));
-        linalg_gemm(weight_3d[g], col_buffer_3d[g], output_3d[g], false, false, s, req[conv::kOut]);
+        //   Assign(output_3d[g], req[dmconv::kOut], dot(weight_3d[g], col_buffer_3d[g]));
+        linalg_gemm(weight_3d[g], col_buffer_3d[g], output_3d[g], false, false, s, req[dmconv::kOut]);
       }
     }
     if (bias_term_) {
-      Tensor<xpu, 1, DType> bias = in_data[conv::kBias].get<xpu, 1, DType>(s);
-      Tensor<xpu, 3, DType> output_3d = out_data[conv::kOut].get_with_shape<xpu, 3, DType>(
+      Tensor<xpu, 1, DType> bias = in_data[dmconv::kBias].get<xpu, 1, DType>(s);
+      Tensor<xpu, 3, DType> output_3d = out_data[dmconv::kOut].get_with_shape<xpu, 3, DType>(
         Shape3(num_, conv_out_channels_, conv_out_spatial_dim_), s);
       // has bias term, broadcast it to the same shape of output_3d in channel dim
       output_3d += mshadow::expr::broadcast<1>(bias, output_3d.shape_);
@@ -180,19 +182,20 @@ class DeformableConvolutionOp : public Operator {
     size_t expected = param_.no_bias == 0 ? 4 : 3;
     CHECK(in_data.size() == expected && in_grad.size() == expected);
     CHECK_EQ(req.size(), expected);
-    CHECK_EQ(in_data[conv::kWeight].CheckContiguous(), true);
-    LayerSetUp(in_grad[conv::kData].shape_,
-               in_grad[conv::kOffset].shape_,
-               out_grad[conv::kOut].shape_);
+    CHECK_EQ(in_data[dmconv::kWeight].CheckContiguous(), true);
+    LayerSetUp(in_grad[dmconv::kData].shape_,
+               in_grad[dmconv::kOffset].shape_,
+               in_grad[dmconv::kMask].shape_,
+               out_grad[dmconv::kOut].shape_);
     Stream<xpu> *s = ctx.get_stream<xpu>();
     // allocate workspace for col_buffer
-    Tensor<xpu, 1, DType> workspace = ctx.requested[conv::kTempSpace]
+    Tensor<xpu, 1, DType> workspace = ctx.requested[dmconv::kTempSpace]
       .get_space_typed<xpu, 1, DType>(Shape1(col_buffer_size_), s);
     // calculate the shape of col_buffer
     TShape col_buffer_shape(num_spatial_axes_ + 1);
     col_buffer_shape[0] = conv_in_channels_ * param_.kernel.Size();
     for (index_t i = 1; i < col_buffer_shape.ndim(); ++i) {
-      col_buffer_shape[i] = out_grad[conv::kData].shape_[i + 1];
+      col_buffer_shape[i] = out_grad[dmconv::kData].shape_[i + 1];
     }
     // create a column buffer using workspace and col_buffer_shape
     TBlob col_buffer(workspace.dptr_, col_buffer_shape, xpu::kDevMask, DataType<DType>::kFlag);
@@ -202,18 +205,18 @@ class DeformableConvolutionOp : public Operator {
     index_t M = kernel_dim_;
     index_t N = conv_out_spatial_dim_;
     index_t K = conv_out_channels_ / group_;
-    Tensor<xpu, 3, DType> weight_3d = in_data[conv::kWeight].get_with_shape<xpu, 3, DType>(
+    Tensor<xpu, 3, DType> weight_3d = in_data[dmconv::kWeight].get_with_shape<xpu, 3, DType>(
       Shape3(group_, K, M), s);
-    Tensor<xpu, 4, DType> out_grad_4d = out_grad[conv::kOut].get_with_shape<xpu, 4, DType>(
+    Tensor<xpu, 4, DType> out_grad_4d = out_grad[dmconv::kOut].get_with_shape<xpu, 4, DType>(
       Shape4(num_, group_, K, N), s);
     Tensor<xpu, 3, DType> col_buffer_3d = col_buffer.get_with_shape<xpu, 3, DType>(
       Shape3(group_, M, N), s);
     // For computing dLoss/dWeight
-    Tensor<xpu, 3, DType> dweight_3d = in_grad[conv::kWeight].get_with_shape<xpu, 3, DType>(
+    Tensor<xpu, 3, DType> dweight_3d = in_grad[dmconv::kWeight].get_with_shape<xpu, 3, DType>(
       Shape3(group_, K, M), s);
 
-    Tensor<xpu, 1, DType> data_grad = in_grad[conv::kData].FlatTo1D<xpu, DType>(s);
-    if (req[conv::kData] == kWriteTo)
+    Tensor<xpu, 1, DType> data_grad = in_grad[dmconv::kData].FlatTo1D<xpu, DType>(s);
+    if (req[dmconv::kData] == kWriteTo)
         data_grad = 0;
 
 
@@ -226,30 +229,34 @@ class DeformableConvolutionOp : public Operator {
       }
 
       // gradient w.r.t. input coordinate data
-      deformable_col2im_coord(s, col_buffer.dptr<DType>(),
-        in_data[conv::kData].dptr<DType>() + n*input_dim_,
-        in_data[conv::kOffset].dptr<DType>() + n*input_offset_dim_,
-        in_grad[conv::kData].shape_, col_buffer.shape_,
+      deformable_masked_col2im_coord(s, col_buffer.dptr<DType>(),
+        in_data[dmconv::kData].dptr<DType>() + n*input_dim_,
+        in_data[dmconv::kOffset].dptr<DType>() + n*input_offset_dim_,
+        in_data[dmconv::kMask].dptr<DType>() + n*input_mask_dim_,
+        in_grad[dmconv::kData].shape_, col_buffer.shape_,
         param_.kernel, param_.pad, param_.stride, param_.dilate, param_.num_deformable_group,
-        in_grad[conv::kOffset].dptr<DType>() + n*input_offset_dim_,
-        req[conv::kOffset]);
+        in_grad[dmconv::kOffset].dptr<DType>() + n*input_offset_dim_,
+        in_grad[dmconv::kMask].dptr<DType>() + n*input_mask_dim_,
+        req[dmconv::kOffset], req[dmconv::kMask]);
 
       // gradient w.r.t. input data
-      deformable_col2im(s, col_buffer.dptr<DType>(),
-        in_data[conv::kOffset].dptr<DType>() + n*input_offset_dim_,
-        in_grad[conv::kData].shape_, col_buffer.shape_,
+      deformable_masked_col2im(s, col_buffer.dptr<DType>(),
+        in_data[dmconv::kOffset].dptr<DType>() + n*input_offset_dim_,
+        in_data[dmconv::kMask].dptr<DType>() + n*input_mask_dim_,
+        in_grad[dmconv::kData].shape_, col_buffer.shape_,
         param_.kernel, param_.pad, param_.stride, param_.dilate, param_.num_deformable_group,
-        in_grad[conv::kData].dptr<DType>() + n*input_dim_,
-        req[conv::kData]);
+        in_grad[dmconv::kData].dptr<DType>() + n*input_dim_,
+        req[dmconv::kData]);
 
       // gradient w.r.t. weight, dWeight should accumulate across the batch and group
-      deformable_im2col(s, in_data[conv::kData].dptr<DType>() + n*input_dim_,
-        in_data[conv::kOffset].dptr<DType>() + n*input_offset_dim_, in_data[conv::kData].shape_,
+      deformable_masked_im2col(s, in_data[dmconv::kData].dptr<DType>() + n*input_dim_,
+        in_data[dmconv::kOffset].dptr<DType>() + n*input_offset_dim_,
+        in_data[dmconv::kMask].dptr<DType>() + n*input_mask_dim_, in_data[dmconv::kData].shape_,
         col_buffer.shape_, param_.kernel, param_.pad, param_.stride, param_.dilate,
         param_.num_deformable_group, col_buffer.dptr<DType>());
 
       for (index_t g = 0; g < group_; ++g) {
-        auto request = (n == 0) ? req[conv::kWeight] : kAddTo;
+        auto request = (n == 0) ? req[dmconv::kWeight] : kAddTo;
         // Legacy approach shown here for comparison:
         //   Assign(dweight_3d[g], request, dot(out_grad_3d[g], col_buffer_3d[g].T()));
         linalg_gemm(out_grad_3d[g], col_buffer_3d[g], dweight_3d[g], false, true, s, request);
@@ -258,15 +265,15 @@ class DeformableConvolutionOp : public Operator {
 
     // gradient w.r.t bias
     if (bias_term_) {
-      Tensor<xpu, 1, DType> dbias = in_grad[conv::kBias].get<xpu, 1, DType>(s);
-      Tensor<xpu, 3, DType> dout = out_grad[conv::kOut].get_with_shape<xpu, 3, DType>(
+      Tensor<xpu, 1, DType> dbias = in_grad[dmconv::kBias].get<xpu, 1, DType>(s);
+      Tensor<xpu, 3, DType> dout = out_grad[dmconv::kOut].get_with_shape<xpu, 3, DType>(
         Shape3(num_, conv_out_channels_, conv_out_spatial_dim_), s);
-      ASSIGN_DISPATCH(dbias, req[conv::kBias], sumall_except_dim<1>(dout));
+      ASSIGN_DISPATCH(dbias, req[dmconv::kBias], sumall_except_dim<1>(dout));
     }
   }
 
  private:
-  void LayerSetUp(const TShape& ishape, const TShape& offset_shape, const TShape& oshape) {
+  void LayerSetUp(const TShape& ishape, const TShape& offset_shape, const TShape& mask_shape, const TShape& oshape) {
     channel_axis_ = 1;  // hard code channel axis
     const index_t first_spatial_axis = channel_axis_ + 1;
     const index_t num_axes = param_.kernel.ndim() + 2;
@@ -295,13 +302,14 @@ class DeformableConvolutionOp : public Operator {
     // input/output image size (#channels * height * width)
     input_dim_ = ishape.ProdShape(1, ishape.ndim());
     input_offset_dim_ = offset_shape.ProdShape(1, offset_shape.ndim());
+    input_mask_dim_ = mask_shape.ProdShape(1, mask_shape.ndim());
     output_dim_ = oshape.ProdShape(1, oshape.ndim());
     num_kernels_im2col_ = conv_in_channels_ * conv_out_spatial_dim_;
     num_kernels_col2im_ = input_dim_;
   }
 
  private:
-  DeformableConvolutionParam param_;
+  DeformableMaskedConvolutionParam param_;
   index_t channel_axis_;  // channel axis of the input
   index_t channels_;  // number of channels of input image
   index_t num_spatial_axes_;  // number of spatial axes
@@ -317,6 +325,7 @@ class DeformableConvolutionOp : public Operator {
   index_t col_buffer_size_;
   index_t input_dim_;
   index_t input_offset_dim_;
+  index_t input_mask_dim_;
   index_t output_dim_;
   index_t num_kernels_im2col_;
   index_t num_kernels_col2im_;
@@ -325,19 +334,19 @@ class DeformableConvolutionOp : public Operator {
 };  // class ConvolutionOp
 
 template<typename xpu>
-Operator* CreateOp(DeformableConvolutionParam param, int dtype,
+Operator* CreateOp(DeformableMaskedConvolutionParam param, int dtype,
   std::vector<TShape> *in_shape,
   std::vector<TShape> *out_shape,
   Context ctx);
 
 #if DMLC_USE_CXX11
-class DeformableConvolutionProp : public OperatorProperty {
+class DeformableMaskedConvolutionProp : public OperatorProperty {
  public:
   std::vector<std::string> ListArguments() const override {
     if (!param_.no_bias) {
-      return{ "data", "offset", "weight", "bias" };
+      return{ "data", "offset", "mask", "weight", "bias" };
     } else {
-      return{ "data", "offset", "weight" };
+      return{ "data", "offset", "mask", "weight" };
     }
   }
 
@@ -363,29 +372,33 @@ class DeformableConvolutionProp : public OperatorProperty {
     std::vector<TShape> *aux_shape) const override {
     using namespace mshadow;
     if (!param_.no_bias) {
-      CHECK_EQ(in_shape->size(), 4U) << "Input:[data, offset, weight, bias]";
+      CHECK_EQ(in_shape->size(), 5U) << "Input:[data, offset, mask, weight, bias]";
     } else {
-      CHECK_EQ(in_shape->size(), 3U) << "Input:[data, offset, weight]";
+      CHECK_EQ(in_shape->size(), 4U) << "Input:[data, offset, mask, weight]";
     }
     out_shape->resize(1, TShape());
-    const TShape &dshp = (*in_shape)[conv::kData];
-    const TShape &oshp = (*in_shape)[conv::kOffset];
+    const TShape &dshp = (*in_shape)[dmconv::kData];
+    const TShape &oshp = (*in_shape)[dmconv::kOffset];
+    const TShape &mshp = (*in_shape)[dmconv::kMask];
     if (dshp.ndim() == 0) return false;
     if (param_.kernel.ndim() == 2) {
-      // 2d conv
+      // 2d dmconv
       CHECK_EQ(dshp.ndim(), 4U) \
         << "Input data should be 4D in batch-num_filter-y-x";
       CHECK_EQ(oshp.ndim(), 4U) \
         << "Input offset should be 4D in batch-num_filter-y-x";
+      CHECK_EQ(mshp.ndim(), 4U) \
+        << "Input offset should be 4D in batch-num_filter-y-x";
       Shape<4> dshape = ConvertLayout(dshp.get<4>(), param_.layout.value(), kNCHW);
       Shape<4> offsetshape = ConvertLayout(oshp.get<4>(), param_.layout.value(), kNCHW);
+      Shape<4> maskshape = ConvertLayout(mshp.get<4>(), param_.layout.value(), kNCHW);
       Shape<4> wshape = Shape4(param_.num_filter / param_.num_group, dshape[1] / param_.num_group,
         param_.kernel[0], param_.kernel[1]);
       wshape = ConvertLayout(wshape, kNCHW, param_.layout.value());
       wshape[0] *= param_.num_group;
-      SHAPE_ASSIGN_CHECK(*in_shape, conv::kWeight, wshape);
+      SHAPE_ASSIGN_CHECK(*in_shape, dmconv::kWeight, wshape);
       if (!param_.no_bias) {
-        SHAPE_ASSIGN_CHECK(*in_shape, conv::kBias, Shape1(param_.num_filter));
+        SHAPE_ASSIGN_CHECK(*in_shape, dmconv::kBias, Shape1(param_.num_filter));
       }
 
       const index_t ksize_y = static_cast<index_t>(param_.kernel[0]);
@@ -421,6 +434,15 @@ class DeformableConvolutionProp : public OperatorProperty {
       CHECK_EQ(offsetshape[1] / (2 * param_.kernel[0] * param_.kernel[1]), \
                param_.num_deformable_group) \
         << "offset filter must divide deformable group size";
+      CHECK_EQ(oshape[2], maskshape[2]) \
+        << "output height must equal to mask map height";
+      CHECK_EQ(oshape[3], maskshape[3]) \
+        << "output width must equal to mask map width";
+      CHECK_EQ(maskshape[1] % (param_.kernel[0] * param_.kernel[1]), 0U) \
+        << "offset filter must divide deformable group size";
+      CHECK_EQ(maskshape[1] / (param_.kernel[0] * param_.kernel[1]), \
+               param_.num_deformable_group) \
+        << "offset filter must divide deformable group size";
       // Perform incomplete shape inference. Fill in the missing values in data shape.
       // 1) We can always fill in the batch_size.
       // 2) We can back-calculate the input height/width if the corresponding stride is 1.
@@ -432,7 +454,7 @@ class DeformableConvolutionProp : public OperatorProperty {
       if (param_.stride[1] == 1) {
         dshape[3] = oshape[3] + param_.dilate[1] * (ksize_x - 1) - 2 * param_.pad[1];
       }
-      SHAPE_ASSIGN_CHECK(*in_shape, conv::kData,
+      SHAPE_ASSIGN_CHECK(*in_shape, dmconv::kData,
         ConvertLayout(dshape, kNCHW, param_.layout.value()));
       // Check whether the kernel sizes are valid
       if (dshape[2] != 0) {
@@ -467,21 +489,22 @@ class DeformableConvolutionProp : public OperatorProperty {
   }
 
   OperatorProperty* Copy() const override {
-    auto ptr = new DeformableConvolutionProp();
+    auto ptr = new DeformableMaskedConvolutionProp();
     ptr->param_ = param_;
     return ptr;
   }
 
   std::string TypeString() const override {
-    return "_contrib_DeformableConvolution";
+    return "_contrib_DeformableMaskedConvolution";
   }
 
   std::vector<int> DeclareBackwardDependency(
     const std::vector<int> &out_grad,
     const std::vector<int> &in_data,
     const std::vector<int> &out_data) const override {
-    return{ out_grad[conv::kOut], in_data[conv::kData],
-            in_data[conv::kOffset], in_data[conv::kWeight] };
+    return{ out_grad[dmconv::kOut], in_data[dmconv::kData],
+            in_data[dmconv::kOffset], in_data[dmconv::kMask],
+            in_data[dmconv::kWeight] };
   }
 
   std::vector<ResourceRequest> ForwardResource(
@@ -503,9 +526,9 @@ class DeformableConvolutionProp : public OperatorProperty {
     std::vector<int> *in_type) const override;
 
  private:
-  DeformableConvolutionParam param_;
+  DeformableMaskedConvolutionParam param_;
 };  // class ConvolutionProp
 #endif  // DMLC_USE_CXX11
 }  // namespace op
 }  // namespace mxnet
-#endif  // MXNET_OPERATOR_CONTRIB_DEFORMABLE_CONVOLUTION_INL_H_
+#endif  // MXNET_OPERATOR_CONTRIB_DEFORMABLE_MASKED_CONVOLUTION_INL_H_

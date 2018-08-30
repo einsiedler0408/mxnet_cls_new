@@ -58,6 +58,7 @@ struct DeformablePSROIPoolingParam : public dmlc::Parameter<DeformablePSROIPooli
   int sample_per_part;
   float trans_std;
   bool no_trans;
+  bool left_top_alignment;
   DMLC_DECLARE_PARAMETER(DeformablePSROIPoolingParam) {
     DMLC_DECLARE_FIELD(spatial_scale).set_range(0.0, 1.0)
       .describe("Ratio of input feature map height (or w) to raw image height (or w). "
@@ -71,6 +72,8 @@ struct DeformablePSROIPoolingParam : public dmlc::Parameter<DeformablePSROIPooli
       .describe("fix transition std");
     DMLC_DECLARE_FIELD(no_trans).set_default(false)
       .describe("Whether to disable trans parameter.");
+    DMLC_DECLARE_FIELD(left_top_alignment).set_default(false)
+      .describe("Whether to use left_top_alignment."); 
   }
 };
 
@@ -115,7 +118,7 @@ class DeformablePSROIPoolingOp : public Operator {
     }
     DeformablePSROIPoolForward(out, data, bbox, trans, top_count, param_.no_trans,
       param_.spatial_scale, param_.output_dim, param_.group_size, param_.pooled_size,
-      param_.part_size, param_.sample_per_part, param_.trans_std);
+      param_.part_size, param_.sample_per_part, param_.trans_std, param_.left_top_alignment);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -169,7 +172,7 @@ class DeformablePSROIPoolingOp : public Operator {
     }
     DeformablePSROIPoolBackwardAcc(grad_in, grad_trans, grad_out, data, bbox, trans,
       top_count, param_.no_trans, param_.spatial_scale, param_.output_dim, param_.group_size,
-      param_.pooled_size, param_.part_size, param_.sample_per_part, param_.trans_std);
+      param_.pooled_size, param_.part_size, param_.sample_per_part, param_.trans_std, param_.left_top_alignment);
     Assign(grad_roi, req[deformablepsroipool::kBox], 0);
   }
 
