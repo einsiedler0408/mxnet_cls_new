@@ -65,7 +65,7 @@ __global__ void OffsetMaskConstraintBackward(const int n,
                                       const int mask_num, const int spatial_dim, const int height, const int width, 
                                       const int mspatial_dim, const int mheight, const int mwidth, 
                                       const int conv_stride, const int conv_dilate, const int conv_kernel,
-                                      const int mask_offset_ratio, const float grad_scale, 
+                                      const int mask_offset_ratio, const float grad_scale, const bool border_constraint,
                                       DType* offset_grad) {
   CUDA_KERNEL_LOOP(index, n) { 
     const int kindex = index / spatial_dim;
@@ -85,19 +85,24 @@ __global__ void OffsetMaskConstraintBackward(const int n,
     DType conv_iw = w * conv_stride
                   + (kw - conv_kernel_radius) * conv_dilate
                   + offset[((kh * conv_kernel + kw) * 2 + 1) * spatial_dim + s] * conv_dilate;
-    int conv_imh = round(conv_ih * mask_offset_ratio);
-    int conv_imw = round(conv_iw * mask_offset_ratio);            
+    int conv_imh = round(conv_ih * mask_offset_ratio / conv_stride);
+    int conv_imw = round(conv_iw * mask_offset_ratio / conv_stride);            
 
     if (mh < 0 || mh > mheight - 1 || mw < 0 || mw > mwidth - 1)
             continue;
     
     for (int m = 0; m < mask_num; m++) {     
-        DType mask_weight = mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)] * mask_offset_ratio * mask_offset_ratio / mask_num;;
+        DType mask_weight = mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)] * mask_offset_ratio * mask_offset_ratio / mask_num;
         if (mask_weight > 0) {
             DType target_h, target_w;
             if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) {
-                target_h = min(max(conv_ih, DType(0)), DType(height-1));
-                target_w = min(max(conv_iw, DType(0)), DType(width-1));
+                if (border_constraint) {
+                    target_h = min(max(conv_ih, DType(0)), DType(mheight - 1) / mask_offset_ratio);
+                    target_w = min(max(conv_iw, DType(0)), DType(mwidth  - 1) / mask_offset_ratio);
+                } else {
+                    target_h = conv_ih;
+                    target_w = conv_iw;
+                } 
             } else {
                 if (mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)] > 0) {
                     target_h = conv_ih;
@@ -191,7 +196,7 @@ class OffsetMaskConstraintGPUOp : public Operator{
           (num_kernels, offset.dptr_, mask_constraint.dptr_,
            mask_num, height*width, height, width, mheight*mwidth, mheight, mwidth,
            param_.conv_stride, param_.conv_dilate, param_.conv_kernel,
-           param_.mask_offset_ratio, param_.grad_scale,
+           param_.mask_offset_ratio, param_.grad_scale, param_.border_constraint,
            offset_diff.dptr_);
     MSHADOW_CUDA_POST_KERNEL_CHECK(OffsetMaskConstraintBackward);
   }

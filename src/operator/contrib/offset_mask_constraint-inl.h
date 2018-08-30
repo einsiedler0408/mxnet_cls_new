@@ -53,6 +53,7 @@ enum OffsetMaskConstraintForwardResource {kTempResource};
 
 struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintParam> {
   float grad_scale;
+  bool border_constraint;
   int mask_offset_ratio;
   int conv_stride;
   int conv_dilate;
@@ -60,6 +61,7 @@ struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintPa
     
   DMLC_DECLARE_PARAMETER(OffsetMaskConstraintParam) {
     DMLC_DECLARE_FIELD(grad_scale).set_default(1.0).describe("grad_scale");
+    DMLC_DECLARE_FIELD(border_constraint).set_default(true).describe("border_constraint");
     DMLC_DECLARE_FIELD(mask_offset_ratio).set_default(16).describe("mask_offset_ratio");
     DMLC_DECLARE_FIELD(conv_stride).set_default(1).describe("conv_stride");
     DMLC_DECLARE_FIELD(conv_dilate).set_default(1).describe("conv_dilate");
