@@ -97,8 +97,8 @@ __global__ void OffsetMaskConstraintBackward(const int n,
             DType target_h, target_w;
             if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) {
                 if (border_constraint) {
-                    target_h = min(max(conv_ih, DType(0)), DType(mheight - 1) / mask_offset_ratio);
-                    target_w = min(max(conv_iw, DType(0)), DType(mwidth  - 1) / mask_offset_ratio);
+                    target_h = min(max(conv_ih, DType(0)), DType(mheight - 1) * conv_stride / mask_offset_ratio);
+                    target_w = min(max(conv_iw, DType(0)), DType(mwidth  - 1) * conv_stride / mask_offset_ratio);
                 } else {
                     target_h = conv_ih;
                     target_w = conv_iw;
@@ -108,8 +108,8 @@ __global__ void OffsetMaskConstraintBackward(const int n,
                     target_h = conv_ih;
                     target_w = conv_iw;
                 } else {
-                    target_h = mask_constraint[(m * 4 + 2) * mspatial_dim + (conv_imh * mwidth + conv_imw)] / mask_offset_ratio;
-                    target_w = mask_constraint[(m * 4 + 3) * mspatial_dim + (conv_imh * mwidth + conv_imw)] / mask_offset_ratio;
+                    target_h = mask_constraint[(m * 4 + 2) * mspatial_dim + (conv_imh * mwidth + conv_imw)] / mask_offset_ratio * conv_stride;
+                    target_w = mask_constraint[(m * 4 + 3) * mspatial_dim + (conv_imh * mwidth + conv_imw)] / mask_offset_ratio * conv_stride;
                 } 
             }
 
