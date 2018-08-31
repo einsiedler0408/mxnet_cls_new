@@ -58,6 +58,75 @@ namespace mshadow {
 namespace cuda {
 namespace offset_mask_constraint {
 
+template <typename DType>
+__global__ void OffsetMaskConstraintForward(const int n,
+                                      const DType* offset, const DType* mask_constraint, 
+                                      const int mask_num, const int spatial_dim, const int height, const int width, 
+                                      const int mspatial_dim, const int mheight, const int mwidth, 
+                                      const int conv_stride, const int conv_dilate, const int conv_kernel,
+                                      const int mask_offset_ratio, const DType ignore_mask, DType* output_mask) {
+  CUDA_KERNEL_LOOP(index, n) { 
+    const int kindex = index / spatial_dim;
+    const int kh = kindex / conv_kernel;
+    const int kw = kindex % conv_kernel;
+    const int s = index % spatial_dim;  
+    const int h = s / width;
+	const int w = s % width;
+	
+    int mh = h * mask_offset_ratio;
+    int mw = w * mask_offset_ratio;
+    int conv_kernel_radius = conv_kernel / 2;
+    
+    DType conv_ih = h * conv_stride 
+                  + (kh - conv_kernel_radius) * conv_dilate
+                  + offset[((kh * conv_kernel + kw) * 2 + 0) * spatial_dim + s] * conv_dilate;
+    DType conv_iw = w * conv_stride
+                  + (kw - conv_kernel_radius) * conv_dilate
+                  + offset[((kh * conv_kernel + kw) * 2 + 1) * spatial_dim + s] * conv_dilate;
+    int conv_imh = round(conv_ih * mask_offset_ratio / conv_stride);
+    int conv_imw = round(conv_iw * mask_offset_ratio / conv_stride);            
+
+    output_mask[index] = ignore_mask;
+    
+    bool center_fg = false;
+    bool center_input_fg = false;
+    // input/center   fg   bg   out
+    //      fg        1    nan  nan
+    //      bg        0    nan  nan
+    //      out       nan  nan  nan
+
+    if (mh < 0 || mh > mheight - 1 || mw < 0 || mw > mwidth - 1) // center out, ignore
+            continue;
+    
+    if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) // input out, ignore
+            continue;
+    
+    for (int m = 0; m < mask_num; m++) {     
+        if (mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)] > 0) {
+            // center fg
+            center_fg = true;
+            if (mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)] > 0) {
+                // input fg
+                center_input_fg = true;
+            } else {
+                // input bg
+                continue;
+            }
+        } else {
+            // center bg, ignore
+            continue;
+        }
+    }
+    
+    if (center_fg) {
+        if (center_input_fg)
+            output_mask[index] = 1;
+        else
+            output_mask[index] = 0;
+    }
+
+  }
+}
 
 template <typename DType>
 __global__ void OffsetMaskConstraintBackward(const int n,
@@ -149,11 +218,34 @@ class OffsetMaskConstraintGPUOp : public Operator{
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
     Tensor<xpu, 4, DType> offset = in_data[offsetMaskConstraint::kOffset].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> mask_constraint = in_data[offsetMaskConstraint::kMaskConstraint].get<xpu, 4, DType>(s);
 
     Tensor<xpu, 4, DType> output = out_data[offsetMaskConstraint::kOutput].get<xpu, 4, DType>(s);
     if (req[offsetMaskConstraint::kOutput] == kWriteTo)
             output = 0;
-    output += offset;    
+    output += offset;
+    
+    if (param_.output_mask) {
+        CHECK_EQ(req[offsetMaskConstraint::kGTMask], kWriteTo);
+        Tensor<xpu, 4, DType> mask = out_data[offsetMaskConstraint::kGTMask].get<xpu, 4, DType>(s);
+        
+        index_t height = offset.shape_[2];
+        index_t width  = offset.shape_[3];
+        index_t mask_num = mask_constraint.shape_[0];
+        index_t mheight  = mask_constraint.shape_[2];
+        index_t mwidth   = mask_constraint.shape_[3];
+        
+        index_t num_kernels = param_.conv_kernel * param_.conv_kernel * height * width;    
+        OffsetMaskConstraintForward // NOLINT_NEXT_LINE(whitespace/operators)
+              <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
+              (num_kernels, offset.dptr_, mask_constraint.dptr_,
+               mask_num, height*width, height, width, mheight*mwidth, mheight, mwidth,
+               param_.conv_stride, param_.conv_dilate, param_.conv_kernel,
+               param_.mask_offset_ratio, param_.ignore_mask,
+               mask.dptr_);
+        MSHADOW_CUDA_POST_KERNEL_CHECK(OffsetMaskConstraintForward);
+    }
+
   }
 
   virtual void Backward(const OpContext &ctx,

@@ -25,8 +25,8 @@
  * \brief OffsetMaskConstraint Operator
  * \author Piotr Teterwak, Bing Xu, Jian Guo, Xizhou Zhu
 */
-#ifndef MXNET_OPERATOR_CONTRIB_OFFSET_GENERATOR_INL_H_
-#define MXNET_OPERATOR_CONTRIB_OFFSET_GENERATOR_INL_H_
+#ifndef MXNET_OPERATOR_CONTRIB_OFFSET_MASK_CONSTRAINT_INL_H_
+#define MXNET_OPERATOR_CONTRIB_OFFSET_MASK_CONSTRAINT_INL_H_
 
 #include <dmlc/logging.h>
 #include <dmlc/parameter.h>
@@ -47,13 +47,17 @@ namespace op {
 
 namespace offsetMaskConstraint {
 enum OffsetMaskConstraintOpInputs {kOffset, kMaskConstraint};
-enum OffsetMaskConstraintOpOutputs {kOutput};
+enum OffsetMaskConstraintOpOutputs {kOutput, kGTMask};
 enum OffsetMaskConstraintForwardResource {kTempResource};
 }  // offsetMaskConstraint
 
 struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintParam> {
   float grad_scale;
   bool border_constraint;
+  
+  bool output_mask;
+  float ignore_mask;
+  
   int mask_offset_ratio;
   int conv_stride;
   int conv_dilate;
@@ -62,6 +66,10 @@ struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintPa
   DMLC_DECLARE_PARAMETER(OffsetMaskConstraintParam) {
     DMLC_DECLARE_FIELD(grad_scale).set_default(1.0).describe("grad_scale");
     DMLC_DECLARE_FIELD(border_constraint).set_default(true).describe("border_constraint");
+    
+    DMLC_DECLARE_FIELD(output_mask).set_default(false).describe("output_mask");
+    DMLC_DECLARE_FIELD(ignore_mask).set_default(1.0).describe("ignore_mask");
+    
     DMLC_DECLARE_FIELD(mask_offset_ratio).set_default(16).describe("mask_offset_ratio");
     DMLC_DECLARE_FIELD(conv_stride).set_default(1).describe("conv_stride");
     DMLC_DECLARE_FIELD(conv_dilate).set_default(1).describe("conv_dilate");
@@ -93,6 +101,8 @@ class OffsetMaskConstraintProp : public OperatorProperty {
  
     out_shape->clear();
     out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
+    if (param_.output_mask)
+        out_shape->push_back(Shape4(dshape[0], dshape[1]/2, dshape[2], dshape[3]));
     return true;    
   }
 
@@ -125,11 +135,17 @@ class OffsetMaskConstraintProp : public OperatorProperty {
   }
 
   int NumVisibleOutputs() const override {
-    return 1;
+    if (param_.output_mask)
+        return 2;
+    else
+        return 1;
   }
 
   int NumOutputs() const override {
-    return 1;
+    if (param_.output_mask)
+        return 2;
+    else
+        return 1;
   }
 
   std::vector<std::string> ListArguments() const override {
@@ -137,7 +153,10 @@ class OffsetMaskConstraintProp : public OperatorProperty {
   }
 
   std::vector<std::string> ListOutputs() const override {
-    return {"output"};
+    if (param_.output_mask)
+        return {"output", "mask"};
+    else
+        return {"output"};
   }
 
   Operator* CreateOperator(Context ctx) const override;
@@ -149,4 +168,4 @@ class OffsetMaskConstraintProp : public OperatorProperty {
 #endif  // DMLC_USE_CXX11
 }  // namespace op
 }  // namespace mxnet
-#endif  // MXNET_OPERATOR_CONTRIB_OFFSET_GENERATOR_INL_H_
+#endif  // MXNET_OPERATOR_CONTRIB_OFFSET_MASK_CONSTRAINT_INL_H_

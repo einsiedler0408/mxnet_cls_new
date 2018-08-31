@@ -179,7 +179,7 @@ class DeformableMaskedConvolutionOp : public Operator {
     using namespace mshadow;
     using namespace mshadow::expr;
     CHECK_EQ(out_grad.size(), 1U);
-    size_t expected = param_.no_bias == 0 ? 4 : 3;
+    size_t expected = param_.no_bias == 0 ? 5 : 4;
     CHECK(in_data.size() == expected && in_grad.size() == expected);
     CHECK_EQ(req.size(), expected);
     CHECK_EQ(in_data[dmconv::kWeight].CheckContiguous(), true);

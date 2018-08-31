@@ -468,12 +468,13 @@ __global__ void deformable_masked_col2im_coord_gpu_kernel(const int n,
       DType inv_w = w_in + j * dilation_w + offset_w;
       if (inv_h < 0 || inv_w < 0 || inv_h >= height || inv_w >= width) {
         inv_h = inv_w = -1;
+      } else {
+        mval += data_col_ptr[col_pos] * dmcn_im2col_bilinear(data_im_ptr + cnt * height * width, width, height, width, inv_h, inv_w);
       }
       const DType weight = dmcn_get_coordinate_weight(
         inv_h, inv_w,
         height, width, data_im_ptr + cnt * height * width, width, bp_dir);
-      val  += weight * data_col_ptr[col_pos] * mask;
-      mval += data_col_ptr[col_pos] * dmcn_im2col_bilinear(data_im_ptr + cnt * height * width, width, height, width, inv_h, inv_w);      
+      val  += weight * data_col_ptr[col_pos] * mask;    
       cnt  += 1;
     }
 

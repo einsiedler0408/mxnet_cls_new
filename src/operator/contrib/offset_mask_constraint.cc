@@ -72,7 +72,7 @@ Operator* OffsetMaskConstraintProp::CreateOperator(Context ctx) const {
 DMLC_REGISTER_PARAMETER(OffsetMaskConstraintParam);
 
 MXNET_REGISTER_OP_PROPERTY(_contrib_OffsetMaskConstraint, OffsetMaskConstraintProp)
-.describe("Offset Generator")
+.describe("Offset Mask Constraint")
 .add_argument("input", "NDArray-or-Symbol", "Input.")
 .add_arguments(OffsetMaskConstraintParam::__FIELDS__());
 
