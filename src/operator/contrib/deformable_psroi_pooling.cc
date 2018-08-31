@@ -50,7 +50,8 @@ namespace mshadow {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     // NOT_IMPLEMENTED;
     return;
   }
@@ -70,7 +71,8 @@ namespace mshadow {
     const int pooled_size,
     const int part_size,
     const int sample_per_part,
-    const float trans_std) {
+    const float trans_std,
+    const bool left_top_alignment) {
     // NOT_IMPLEMENTED;
     return;
   }
