@@ -86,45 +86,84 @@ __global__ void OffsetMaskConstraintForward(const int n,
     int conv_imh = round(conv_ih * mask_offset_ratio / conv_stride);
     int conv_imw = round(conv_iw * mask_offset_ratio / conv_stride);            
 
-    output_mask[index] = ignore_mask;
+    output_mask[index] = -1;
     
-    bool center_fg = false;
-    bool center_input_fg = false;
-    // input/center   fg   bg   out
-    //      fg        1    nan  nan
-    //      bg        0    nan  nan
-    //      out       nan  nan  nan
+    int center_fg_count = 0;
+    int center_bg_count = 0;
+    int center_fg_input_fg_count = 0;
+    int center_fg_input_bg_count = 0;
+    int center_bg_input_fg_count = 0;
+    int center_bg_input_bg_count = 0;
+    // input/center   fg   border   bg
+    //      fg        1      -1      0 
+    //    border      -1     -1     -1
+    //      bg        0      -1     ig
 
     if (mh < 0 || mh > mheight - 1 || mw < 0 || mw > mwidth - 1) // center out, ignore
             continue;
     
     if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) // input out, ignore
             continue;
-    
-    for (int m = 0; m < mask_num; m++) {     
-        if (mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)] > 0) {
-            // center fg
-            center_fg = true;
-            if (mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)] > 0) {
-                // input fg
-                center_input_fg = true;
-            } else {
+
+    for (int m = 0; m < mask_num; m++) {   
+        if (mask_constraint[(m * 4 + 1) * mspatial_dim + (mh * mwidth + mw)] == 0) {
+            // center bg
+            center_bg_count++;
+            if (mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)] == 0) {
                 // input bg
+                center_bg_input_bg_count++;
+            } else if (mask_constraint[(m * 4 + 0) * mspatial_dim + (conv_imh * mwidth + conv_imw)] == 0) {
+                // input border
                 continue;
+            } else {
+                // input fg
+                center_bg_input_fg_count++;
             }
-        } else {
-            // center bg, ignore
+        } else if (mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)] == 0) {
+            // center border
             continue;
+        } else {
+            // center fg
+            center_fg_count++;
+            if (mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)] == 0) {
+                // input bg
+                center_fg_input_bg_count++;
+            } else if (mask_constraint[(m * 4 + 0) * mspatial_dim + (conv_imh * mwidth + conv_imw)] == 0) {
+                // input border
+                continue;
+            } else {
+                // input fg
+                center_fg_input_fg_count++;
+            }
         }
     }
     
-    if (center_fg) {
-        if (center_input_fg)
+    if (center_fg_count > 0) {
+        // center exists fg
+        if (center_fg_input_fg_count > 0)
+            // input exists the same fg
             output_mask[index] = 1;
-        else
+        else if (center_fg_input_bg_count == center_fg_count)
+            // input strictly bg
             output_mask[index] = 0;
+        else 
+            // input exists border
+            output_mask[index] = -1;
+    } else if (center_bg_count == mask_num) {
+        // center strictly bg
+        if (center_bg_input_fg_count > 0)
+            // input exists fg
+            output_mask[index] = 0;
+        else if (center_bg_input_bg_count == center_bg_count)
+            // input strictly bg
+            output_mask[index] = ignore_mask;
+        else
+            // input exists border
+            output_mask[index] = -1;
+    } else {
+        // center exists border
+        output_mask[index] = -1;
     }
-
   }
 }
 
