@@ -99,6 +99,11 @@ __global__ void OffsetMaskConstraintForward(const int n,
     //    border      -1     -1     -1
     //      bg        0      -1     ig
 
+    // input/center   fg   border   bg
+    //      fg        1       1      0 
+    //    border      1       1      1
+    //      bg        0       1      1    
+    
     if (mh < 0 || mh > mheight - 1 || mw < 0 || mw > mwidth - 1) // center out, ignore
             continue;
     
@@ -148,7 +153,7 @@ __global__ void OffsetMaskConstraintForward(const int n,
             output_mask[index] = 0;
         else 
             // input exists border
-            output_mask[index] = -1;
+            output_mask[index] = ignore_mask;
     } else if (center_bg_count == mask_num) {
         // center strictly bg
         if (center_bg_input_fg_count > 0)
@@ -156,13 +161,13 @@ __global__ void OffsetMaskConstraintForward(const int n,
             output_mask[index] = 0;
         else if (center_bg_input_bg_count == center_bg_count)
             // input strictly bg
-            output_mask[index] = ignore_mask;
+            output_mask[index] = 1;
         else
             // input exists border
-            output_mask[index] = -1;
+            output_mask[index] = ignore_mask;
     } else {
         // center exists border
-        output_mask[index] = -1;
+        output_mask[index] = ignore_mask;
     }
   }
 }
