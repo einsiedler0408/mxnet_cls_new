@@ -100,9 +100,9 @@ __global__ void OffsetMaskConstraintForward(const int n,
     //      bg        0      -1     ig
 
     // input/center   fg   border   bg
-    //      fg        1       1      0 
-    //    border      1       1      1
-    //      bg        0       1      1    
+    //      fg        1      ig      0 
+    //    border      ig     ig     ig
+    //      bg        0      ig      1    
     
     if (mh < 0 || mh > mheight - 1 || mw < 0 || mw > mwidth - 1) // center out, ignore
             continue;
