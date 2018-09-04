@@ -67,7 +67,7 @@ __global__ void ProposalGridKernel(const int count,
                                    const int num_anchors,
                                    const int height,
                                    const int width,
-                                   const int feature_stride,
+                                   const float feature_stride,
                                    const Dtype* scores,
                                    Dtype* workspace_proposals) {
   for (int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -97,7 +97,7 @@ __global__ void BBoxPredKernel(const int count,
                                const int num_anchors,
                                const int feat_height,
                                const int feat_width,
-                               const int feature_stride,
+                               const float feature_stride,
                                const Dtype* im_infos,
                                const Dtype* boxes,
                                const Dtype* deltas,
@@ -162,7 +162,7 @@ __global__ void IoUPredKernel(const int count,
                               const int num_anchors,
                               const int feat_height,
                               const int feat_width,
-                              const int feature_stride,
+                              const float feature_stride,
                               const Dtype* im_infos,
                               const Dtype* boxes,
                               const Dtype* deltas,
@@ -558,7 +558,7 @@ class MultiPyramidProposalV2GPUOp : public Operator{
         ratio = ratio * (param_.feature_stride[0] * param_.feature_stride[0]) + 0.5;
 
         FRCNN_CUDA_CHECK(cudaMalloc(&workspace_proposals_ptr,
-                                sizeof(float) * (int)(num_images * count_anchors * 5 * 1.5)));
+                                sizeof(float) * (int)(num_images * count_anchors * 5 * ratio)));
       }
 
       // Generate first anchors based on base anchor

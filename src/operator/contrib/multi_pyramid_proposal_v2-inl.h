@@ -58,7 +58,7 @@ struct MultiPyramidProposalV2Param : public dmlc::Parameter<MultiPyramidProposal
   int rpn_min_size;
   nnvm::Tuple<float> scales;
   nnvm::Tuple<float> ratios;
-  nnvm::Tuple<int> feature_stride;
+  nnvm::Tuple<float> feature_stride;
   bool output_score;
   bool iou_loss;
   DMLC_DECLARE_PARAMETER(MultiPyramidProposalV2Param) {
@@ -80,7 +80,7 @@ struct MultiPyramidProposalV2Param : public dmlc::Parameter<MultiPyramidProposal
     DMLC_DECLARE_FIELD(ratios).set_default(nnvm::Tuple<float>(tmp, tmp + 3))
     .describe("Used to generate anchor windows by enumerating ratios");
     tmp_int[0] = 4; tmp_int[1] = 8; tmp_int[2] = 16; tmp_int[3] = 32; tmp_int[4] = 64;
-    DMLC_DECLARE_FIELD(feature_stride).set_default(nnvm::Tuple<int>(tmp_int, tmp_int + 5))
+    DMLC_DECLARE_FIELD(feature_stride).set_default(nnvm::Tuple<float>(tmp_int, tmp_int + 5))
     .describe("The size of the receptive field each unit in the convolution layer of the rpn,"
               "for example the product of all stride's prior to this layer.");
     DMLC_DECLARE_FIELD(output_score).set_default(false)
