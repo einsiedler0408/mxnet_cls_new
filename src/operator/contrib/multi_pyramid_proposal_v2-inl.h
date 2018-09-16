@@ -59,6 +59,7 @@ struct MultiPyramidProposalV2Param : public dmlc::Parameter<MultiPyramidProposal
   nnvm::Tuple<float> scales;
   nnvm::Tuple<float> ratios;
   nnvm::Tuple<float> feature_stride;
+  nnvm::Tuple<float> feat_base_scales;
   bool output_score;
   bool iou_loss;
   DMLC_DECLARE_PARAMETER(MultiPyramidProposalV2Param) {
