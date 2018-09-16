@@ -63,7 +63,6 @@ struct MultiPyramidProposalV2Param : public dmlc::Parameter<MultiPyramidProposal
   bool iou_loss;
   DMLC_DECLARE_PARAMETER(MultiPyramidProposalV2Param) {
     float tmp[] = {0, 0, 0, 0};
-    int tmp_int[] = {0, 0, 0, 0, 0};
     DMLC_DECLARE_FIELD(rpn_pre_nms_top_n).set_default(6000)
     .describe("Number of top scoring boxes to keep after applying NMS to RPN proposals");
     DMLC_DECLARE_FIELD(rpn_post_nms_top_n).set_default(300)
@@ -79,10 +78,13 @@ struct MultiPyramidProposalV2Param : public dmlc::Parameter<MultiPyramidProposal
     tmp[0] = 0.5f; tmp[1] = 1.0f; tmp[2] = 2.0f;
     DMLC_DECLARE_FIELD(ratios).set_default(nnvm::Tuple<float>(tmp, tmp + 3))
     .describe("Used to generate anchor windows by enumerating ratios");
-    tmp_int[0] = 4; tmp_int[1] = 8; tmp_int[2] = 16; tmp_int[3] = 32; tmp_int[4] = 64;
-    DMLC_DECLARE_FIELD(feature_stride).set_default(nnvm::Tuple<float>(tmp_int, tmp_int + 5))
+    tmp[0] = 4.0f; tmp[1] = 8.0f; tmp[2] = 16.0f; tmp[3] = 32.0f; tmp[4] = 64.0f;
+    DMLC_DECLARE_FIELD(feature_stride).set_default(nnvm::Tuple<float>(tmp, tmp + 5))
     .describe("The size of the receptive field each unit in the convolution layer of the rpn,"
               "for example the product of all stride's prior to this layer.");
+    tmp[0] = 1.0f; tmp[1] = 1.0f; tmp[2] = 1.0f; tmp[3] = 1.0f; tmp[4] = 1.0f;
+    DMLC_DECLARE_FIELD(feat_base_scales).set_default(nnvm::Tuple<float>(tmp, tmp + 5))
+    .describe("The anchor scale of each stride feature map.");
     DMLC_DECLARE_FIELD(output_score).set_default(false)
     .describe("Add score to outputs");
     DMLC_DECLARE_FIELD(iou_loss).set_default(false)
@@ -221,6 +223,18 @@ inline void _Transform(float scale,
 
   _MakeAnchor(new_w, new_h, x_ctr,
              y_ctr, out_anchors);
+}
+
+// out_anchors must have shape (n, 5), where n is ratios.size() * scales.size()
+inline void GenerateAnchorsV2(const std::vector<float>& base_anchor,
+                            const std::vector<float>& ratios,
+                            const std::vector<float>& scales,
+                            std::vector<float> *out_anchors) {
+  for (size_t j = 0; j < ratios.size(); ++j) {
+    for (size_t k = 0; k < scales.size(); ++k) {
+      _Transform(scales[k], ratios[j], base_anchor, out_anchors);
+    }
+  }
 }
 
 // out_anchors must have shape (n, 5), where n is ratios.size() * scales.size()

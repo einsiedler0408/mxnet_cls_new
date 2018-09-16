@@ -115,6 +115,11 @@ class CuDNNBilinearSamplerV2Op : public Operator {
       BilinearSamplerV2Backward(gdata, ggrid, grad, data, grid);
     } else if (req[bs_v2::kData] == kNullOp && req[bs_v2::kGrid] == kNullOp) {
       return;
+    } else if (req[bs_v2::kData] != kNullOp && req[bs_v2::kGrid] == kNullOp) {
+      if (req[bs_v2::kData] == kWriteTo) {
+        gdata = scalar<DType>(0.0f);
+      }
+      BilinearSamplerV2DataBackward(gdata, grad, data, grid);
     } else {
       LOG(FATAL) << "Have not implemented the data req combinations! gdata_req="
                  << req[bs_v2::kData] << " ggrid_req=" << req[bs_v2::kGrid];

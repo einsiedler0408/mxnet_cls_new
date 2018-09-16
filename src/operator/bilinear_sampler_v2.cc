@@ -77,6 +77,65 @@ inline void BilinearSamplerV2Forward(const Tensor<cpu, 4, DType> &output,
 }
 
 template<typename DType>
+inline void BilinearSamplerV2DataBackward(const Tensor<cpu, 4, DType> &gdata,
+                                     const Tensor<cpu, 4, DType> &output_grad,
+                                     const Tensor<cpu, 4, DType> &input_data,
+                                     const Tensor<cpu, 4, DType> &grid) {
+  DType *g_input = gdata.dptr_;
+  const DType *grid_src = grid.dptr_;
+  const DType *grad = output_grad.dptr_;
+  const DType *data = input_data.dptr_;
+  int o_n = output_grad.size(0), o_h = output_grad.size(1),
+      o_w = output_grad.size(2), o_c = output_grad.size(3);
+  int i_h = input_data.size(1), i_w = input_data.size(2), i_c = input_data.size(3);
+  for (index_t n = 0; n < static_cast<index_t>(o_n); ++n) {
+     for (index_t h = 0; h < static_cast<index_t>(o_h); ++h) {
+        for (index_t w = 0; w < static_cast<index_t>(o_w); ++w) {
+          DType top_left_y_gw = 0.0;
+          DType top_left_x_gw = 0.0;
+          index_t grid_src_index = n * o_h * o_w * 2 + h * o_w + w;
+          DType y_real = (*(grid_src + grid_src_index + o_h * o_w) + 1) * (i_h - 1) / 2;
+          DType x_real = (*(grid_src + grid_src_index) + 1) * (i_w - 1) / 2;
+          int top_left_y = static_cast<int>(floor(y_real));
+          int top_left_x = static_cast<int>(floor(x_real));
+          DType top_left_y_w = 1.0 - (y_real - top_left_y);
+          DType top_left_x_w = 1.0 - (x_real - top_left_x);
+          for (index_t c = 0; c < static_cast<index_t>(o_c); ++c) {
+            index_t grad_index = n * o_h * o_w * o_c + h * o_w * o_c + w * o_c + c;
+            int data_index = n * i_h * i_w * i_c + top_left_y * i_w * i_c + top_left_x * i_c
+                                  + c;
+            // calc 4 vertex value in input data
+            DType top_left_v = 0;
+            DType top_right_v = 0;
+            DType bottom_left_v = 0;
+            DType bottom_right_v = 0;
+            // calc input grad
+            if (between(top_left_x, 0, i_w-1) && between(top_left_y, 0, i_h-1)) {
+              *(g_input + data_index) += *(grad + grad_index) * top_left_y_w * top_left_x_w;
+              top_left_v = *(data + data_index);
+            }
+            if (between(top_left_x+1, 0, i_w-1) && between(top_left_y, 0, i_h-1)) {
+              *(g_input + data_index + i_c) += *(grad + grad_index) * top_left_y_w
+                                              * (1.0 - top_left_x_w);
+              top_right_v = *(data + data_index + i_c);
+            }
+            if (between(top_left_x, 0, i_w-1) && between(top_left_y+1, 0, i_h-1)) {
+              *(g_input + data_index + i_w * i_c) += *(grad + grad_index) * (1.0 - top_left_y_w)
+                                              * top_left_x_w;
+              bottom_left_v = *(data + data_index + i_w * i_c);
+            }
+            if (between(top_left_x+1, 0, i_w-1) && between(top_left_y+1, 0, i_h-1)) {
+              *(g_input + data_index + i_w * i_c + i_c) += *(grad + grad_index) * (1.0 - top_left_y_w)
+                                                  * (1.0 - top_left_x_w);
+              bottom_right_v = *(data + data_index + i_w * i_c + i_c);
+            }
+          }
+        }
+     }
+  }
+}
+
+template<typename DType>
 inline void BilinearSamplerV2Backward(const Tensor<cpu, 4, DType> &gdata,
                                      const Tensor<cpu, 4, DType> &ggrid,
                                      const Tensor<cpu, 4, DType> &output_grad,
