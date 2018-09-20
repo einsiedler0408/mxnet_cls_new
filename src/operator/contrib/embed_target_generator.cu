@@ -136,7 +136,7 @@ class EmbedTargetGeneratorGPUOp : public Operator{
     index_t num_kernels = neighborhood_grid_width * neighborhood_grid_width * height * width;    
     EmbedTargetGeneratorForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius
+          (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius,
            mask_num, height*width, height, width, output.dptr_);
     MSHADOW_CUDA_POST_KERNEL_CHECK(EmbedTargetGeneratorForward);
 
