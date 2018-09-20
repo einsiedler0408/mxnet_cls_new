@@ -74,8 +74,8 @@ __global__ void EmbedTargetGeneratorForward(const int n,
     int both_fg = 0;
     int both_bg = 0;
     for (int m = 0; m < mask_num; m++) {
-        DType mask_center = mask_constraint[(m * 4 + 0) * spatial_dim + (h * width + w)];
-        DType mask_offset = mask_constraint[(m * 4 + 1) * spatial_dim + (offset_h * width + offset_w)];
+        DType mask_center = mask[(m * 4 + 0) * spatial_dim + (h * width + w)];
+        DType mask_offset = mask[(m * 4 + 1) * spatial_dim + (offset_h * width + offset_w)];
         
         if (mask_center > 0 && mask_offset > 0) {
             both_fg++;
@@ -127,7 +127,7 @@ class EmbedTargetGeneratorGPUOp : public Operator{
     Tensor<xpu, 4, DType> output = out_data[embedTargetGenerator::kOutput].get<xpu, 4, DType>(s);
     CHECK_EQ(req[embedTargetGenerator::kOutput], kWriteTo);
             
-    index_t mask_num = mask.shape[0];
+    index_t mask_num = mask.shape_[0];
     index_t height = mask.shape_[2];
     index_t width  = mask.shape_[3];
     index_t neighborhood_grid_radius = param_.max_displacement / param_.stride2;
@@ -136,7 +136,7 @@ class EmbedTargetGeneratorGPUOp : public Operator{
     index_t num_kernels = neighborhood_grid_width * neighborhood_grid_width * height * width;    
     EmbedTargetGeneratorForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius,
+          (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius, param_.stride2,
            mask_num, height*width, height, width, output.dptr_);
     MSHADOW_CUDA_POST_KERNEL_CHECK(EmbedTargetGeneratorForward);
 
