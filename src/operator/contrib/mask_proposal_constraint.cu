@@ -86,6 +86,11 @@ __global__ void MaskProposalConstraintForward(const int n,
     if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) // input out, ignore
             continue;
 
+    // input/center   fg   border   bg
+    //      fg        1      ig      0 
+    //    border      ig     ig     ig
+    //      bg        0      ig     ig    
+            
     DType max_center_prob = 0;
     DType max_input_prob = 0;
     DType max_both_prob = 0;
@@ -93,6 +98,9 @@ __global__ void MaskProposalConstraintForward(const int n,
     for (int m = 0; m < mask_num; m++) {
         DType conf_center = mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)];
         DType conf_input  = mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
+        
+        DType sconf_center = mask_constraint[(m * 4 + 1) * mspatial_dim + (mh * mwidth + mw)];
+        DType sconf_input  = mask_constraint[(m * 4 + 0) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
         
         if (conf_center > 0) {
             max_center_prob = max(max_center_prob, conf_center);
@@ -109,9 +117,10 @@ __global__ void MaskProposalConstraintForward(const int n,
         if (conf_center > 0 && conf_input == 0) {
             max_diff_prob = max(max_diff_prob, conf_center);
         }
-        if (conf_center == 0 && conf_input > 0) {
-            max_diff_prob = max(max_diff_prob, conf_input);
-        }
+
+        //if (sconf_center == 0 && sconf_input > 0) {
+        //    max_diff_prob = max(max_diff_prob, sconf_input);
+        //} 
         
     }
     
