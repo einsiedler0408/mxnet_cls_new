@@ -57,6 +57,7 @@ struct MaskProposalConstraintParam : public dmlc::Parameter<MaskProposalConstrai
   int conv_stride;
   int conv_dilate;
   int conv_kernel;
+  bool soft_mask;
     
   DMLC_DECLARE_PARAMETER(MaskProposalConstraintParam) {
     DMLC_DECLARE_FIELD(ignore_mask).set_default(1.0).describe("ignore_mask");
@@ -64,6 +65,7 @@ struct MaskProposalConstraintParam : public dmlc::Parameter<MaskProposalConstrai
     DMLC_DECLARE_FIELD(conv_stride).set_default(1).describe("conv_stride");
     DMLC_DECLARE_FIELD(conv_dilate).set_default(1).describe("conv_dilate");
     DMLC_DECLARE_FIELD(conv_kernel).set_default(3).describe("conv_kernel");
+    DMLC_DECLARE_FIELD(soft_mask).set_default(false).describe("soft_mask");
   }
 };
 

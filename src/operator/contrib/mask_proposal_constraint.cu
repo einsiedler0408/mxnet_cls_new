@@ -52,7 +52,7 @@ namespace mask_proposal_constraint {
 
 template <typename DType>
 __global__ void MaskProposalConstraintForward(const int n,
-                                      const DType* offset, const DType* mask_constraint,
+                                      const DType* offset, const DType* mask_constraint, const bool soft_mask,
                                       const int mask_num, const int spatial_dim, const int height, const int width, 
                                       const int mspatial_dim, const int mheight, const int mwidth, 
                                       const int conv_stride, const int conv_dilate, const int conv_kernel,
@@ -86,62 +86,62 @@ __global__ void MaskProposalConstraintForward(const int n,
     if (conv_imh < 0 || conv_imh > mheight - 1 || conv_imw < 0 || conv_imw > mwidth - 1) // input out, ignore
             continue;
 
-    // input/center   fg   border   bg
-    //      fg        1      ig      0 
-    //    border      ig     ig     ig
-    //      bg        0      ig     ig    
+    if (soft_mask) {
+            DType max_diff_prob = 0;
+        for (int m = 0; m < mask_num; m++) {
+            DType label_center = mask_constraint[(m * 4 + 2) * mspatial_dim + (mh * mwidth + mw)];
+            DType label_input  = mask_constraint[(m * 4 + 2) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
+            DType conf_center  = mask_constraint[(m * 4 + 3) * mspatial_dim + (mh * mwidth + mw)];
+            DType conf_input   = mask_constraint[(m * 4 + 3) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
             
-    DType max_center_prob = 0;
-    DType max_input_prob = 0;
-    DType max_both_prob = 0;
-    DType max_diff_prob = 0;
-    for (int m = 0; m < mask_num; m++) {
-        DType conf_center = mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)];
-        DType conf_input  = mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
-        
-        DType sconf_center = mask_constraint[(m * 4 + 1) * mspatial_dim + (mh * mwidth + mw)];
-        DType sconf_input  = mask_constraint[(m * 4 + 0) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
-        
-        if (conf_center > 0) {
-            max_center_prob = max(max_center_prob, conf_center);
+            if (label_center == 1 && label_input == 0) {
+                max_diff_prob = max(max_diff_prob, conf_center-conf_input);
+            } 
         }
         
-        if (conf_input > 0) {
-            max_input_prob = max(max_input_prob, conf_input);
+        output_mask[index] = 1-max_diff_prob;
+    } else {
+        DType max_center_prob = 0;
+        DType max_input_prob = 0;
+        DType max_both_prob = 0;
+        DType max_diff_prob = 0;
+        for (int m = 0; m < mask_num; m++) {
+            DType conf_center = mask_constraint[(m * 4 + 0) * mspatial_dim + (mh * mwidth + mw)];
+            DType conf_input  = mask_constraint[(m * 4 + 1) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
+            
+            DType sconf_center = mask_constraint[(m * 4 + 1) * mspatial_dim + (mh * mwidth + mw)];
+            DType sconf_input  = mask_constraint[(m * 4 + 0) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
+            
+            if (conf_center > 0) {
+                max_center_prob = max(max_center_prob, conf_center);
+            }
+            
+            if (conf_input > 0) {
+                max_input_prob = max(max_input_prob, conf_input);
+            }
+            
+            if (conf_center > 0 && conf_input > 0) {
+                max_both_prob = max(max_both_prob, conf_center);
+            }
+            
+            if (conf_center > 0 && conf_input == 0) {
+                max_diff_prob = max(max_diff_prob, conf_center);
+            }
+        
+            //if (sconf_center == 0 && sconf_input > 0) {
+            //    max_diff_prob = max(max_diff_prob, sconf_input);
+            //} 
+            
         }
         
-        if (conf_center > 0 && conf_input > 0) {
-            max_both_prob = max(max_both_prob, conf_center);
-        }
+        //if (max_both_prob > max_diff_prob) {
+        //    output_mask[index] = 1;
+        //} else {
+        //    output_mask[index] = 1 - max_diff_prob;
+        //}
         
-        if (conf_center > 0 && conf_input == 0) {
-            max_diff_prob = max(max_diff_prob, conf_center);
-        }
-
-        //if (sconf_center == 0 && sconf_input > 0) {
-        //    max_diff_prob = max(max_diff_prob, sconf_input);
-        //} 
-        
-    }
-    
-    //if (max_both_prob > max_diff_prob) {
-    //    output_mask[index] = 1;
-    //} else {
-    //    output_mask[index] = 1 - max_diff_prob;
-    //}
-
-    output_mask[index] = 1 - max_diff_prob;
-    
-    //output_mask[index] = 1 - max_center_prob * (1-max_both_prob);
-    //if (max_center_prob > 0)
-    //    output_mask[index] = max_both_prob / max_center_prob;
-    //else
-    //    output_mask[index] = 1;
-    //if (max_center_prob > 0 || max_input_prob > 0)
-    //    output_mask[index] = max_both_prob;
-    //else
-    //    output_mask[index] = 1;
-    
+        output_mask[index] = 1 - max_diff_prob;
+    }    
   }
 }
 
