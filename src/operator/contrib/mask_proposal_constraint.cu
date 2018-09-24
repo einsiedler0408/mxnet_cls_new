@@ -186,7 +186,7 @@ class MaskProposalConstraintGPUOp : public Operator{
     index_t num_kernels = param_.conv_kernel * param_.conv_kernel * height * width;    
     MaskProposalConstraintForward // NOLINT_NEXT_LINE(whitespace/operators)
           <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, offset.dptr_, mask_constraint.dptr_,
+          (num_kernels, offset.dptr_, mask_constraint.dptr_, param_.soft_mask,
            mask_num, height*width, height, width, mheight*mwidth, mheight, mwidth,
            param_.conv_stride, param_.conv_dilate, param_.conv_kernel,
            param_.mask_offset_ratio, param_.ignore_mask,
