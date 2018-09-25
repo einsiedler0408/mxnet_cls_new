@@ -87,7 +87,8 @@ __global__ void MaskProposalConstraintForward(const int n,
             continue;
 
     if (soft_mask) {
-            DType max_diff_prob = 0;
+        
+        DType max_diff_prob = 0;
         for (int m = 0; m < mask_num; m++) {
             DType label_center = mask_constraint[(m * 4 + 2) * mspatial_dim + (mh * mwidth + mw)];
             DType label_input  = mask_constraint[(m * 4 + 2) * mspatial_dim + (conv_imh * mwidth + conv_imw)];
@@ -97,10 +98,11 @@ __global__ void MaskProposalConstraintForward(const int n,
             if (label_center == 1 && label_input == 0) {
                 max_diff_prob = max(max_diff_prob, conf_center-conf_input);
             } 
-        }
-        
+        } 
         output_mask[index] = 1-max_diff_prob;
+        
     } else {
+        
         DType max_center_prob = 0;
         DType max_input_prob = 0;
         DType max_both_prob = 0;
@@ -132,14 +134,12 @@ __global__ void MaskProposalConstraintForward(const int n,
             //    max_diff_prob = max(max_diff_prob, sconf_input);
             //} 
             
-        }
-        
+        } 
         //if (max_both_prob > max_diff_prob) {
         //    output_mask[index] = 1;
         //} else {
         //    output_mask[index] = 1 - max_diff_prob;
-        //}
-        
+        //}   
         output_mask[index] = 1 - max_diff_prob;
     }    
   }
