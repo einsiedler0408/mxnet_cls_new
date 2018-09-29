@@ -47,7 +47,7 @@ namespace op {
 
 namespace offsetMaskConstraint {
 enum OffsetMaskConstraintOpInputs {kOffset, kMaskConstraint};
-enum OffsetMaskConstraintOpOutputs {kOutput, kGTMask};
+enum OffsetMaskConstraintOpOutputs {kOutput, kGTMask, kGTLabel};
 enum OffsetMaskConstraintForwardResource {kTempResource};
 }  // offsetMaskConstraint
 
@@ -57,6 +57,7 @@ struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintPa
   
   bool output_mask;
   float ignore_mask;
+  bool compressed_mask;
   
   int mask_offset_ratio;
   int conv_stride;
@@ -69,6 +70,7 @@ struct OffsetMaskConstraintParam : public dmlc::Parameter<OffsetMaskConstraintPa
     
     DMLC_DECLARE_FIELD(output_mask).set_default(false).describe("output_mask");
     DMLC_DECLARE_FIELD(ignore_mask).set_default(1.0).describe("ignore_mask");
+    DMLC_DECLARE_FIELD(compressed_mask).set_default(false).describe("compressed_mask");
     
     DMLC_DECLARE_FIELD(mask_offset_ratio).set_default(16).describe("mask_offset_ratio");
     DMLC_DECLARE_FIELD(conv_stride).set_default(1).describe("conv_stride");
@@ -103,6 +105,8 @@ class OffsetMaskConstraintProp : public OperatorProperty {
     out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
     if (param_.output_mask)
         out_shape->push_back(Shape4(dshape[0], dshape[1]/2, dshape[2], dshape[3]));
+    if (param_.compressed_mask)
+        out_shape->push_back(Shape4(dshape[0], dshape[1]/2, dshape[2], dshape[3]));
     return true;    
   }
 
@@ -135,14 +139,18 @@ class OffsetMaskConstraintProp : public OperatorProperty {
   }
 
   int NumVisibleOutputs() const override {
-    if (param_.output_mask)
+    if (param_.compressed_mask)
+        return 3;
+    else if (param_.output_mask)
         return 2;
     else
         return 1;
   }
 
   int NumOutputs() const override {
-    if (param_.output_mask)
+    if (param_.compressed_mask)
+        return 3;
+    else if (param_.output_mask)
         return 2;
     else
         return 1;
@@ -153,7 +161,9 @@ class OffsetMaskConstraintProp : public OperatorProperty {
   }
 
   std::vector<std::string> ListOutputs() const override {
-    if (param_.output_mask)
+    if (param_.compressed_mask)
+        return {"output", "mask", "label"};
+    else if (param_.output_mask)
         return {"output", "mask"};
     else
         return {"output"};
