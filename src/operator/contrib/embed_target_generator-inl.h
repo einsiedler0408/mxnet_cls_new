@@ -47,17 +47,19 @@ namespace op {
 
 namespace embedTargetGenerator {
 enum EmbedTargetGeneratorOpInputs {kMask};
-enum EmbedTargetGeneratorOpOutputs {kOutput};
+enum EmbedTargetGeneratorOpOutputs {kOutput, kInst};
 enum EmbedTargetGeneratorForwardResource {kTempResource};
 }  // embedTargetGenerator
 
 struct EmbedTargetGeneratorParam : public dmlc::Parameter<EmbedTargetGeneratorParam> {
-  int max_displacement ;
-  int stride2 ;
+  int max_displacement;
+  int stride2;
+  bool compressed_mask;
     
   DMLC_DECLARE_PARAMETER(EmbedTargetGeneratorParam) {
-    DMLC_DECLARE_FIELD(max_displacement ).set_default(1).describe("max_displacement ");
-    DMLC_DECLARE_FIELD(stride2 ).set_default(1).describe("stride2 ");
+    DMLC_DECLARE_FIELD(max_displacement).set_default(1).describe("max_displacement");
+    DMLC_DECLARE_FIELD(stride2).set_default(1).describe("stride2");
+    DMLC_DECLARE_FIELD(compressed_mask).set_default(false).describe("compressed_mask");
   }
 };
 
@@ -89,6 +91,8 @@ class EmbedTargetGeneratorProp : public OperatorProperty {
  
     out_shape->clear();
     out_shape->push_back(Shape4(1, top_channels, dshape[2], dshape[3]));
+    if (param_.compressed_mask)
+        out_shape->push_back(Shape4(1, top_channels, dshape[2], dshape[3]));
     return true;    
   }
 
@@ -120,11 +124,17 @@ class EmbedTargetGeneratorProp : public OperatorProperty {
   }
 
   int NumVisibleOutputs() const override {
-    return 1;
+    if (param_.compressed_mask)
+        return 2;
+    else
+        return 1;
   }
 
   int NumOutputs() const override {
-    return 1;
+    if (param_.compressed_mask)
+        return 2;
+    else
+        return 1;
   }
 
   std::vector<std::string> ListArguments() const override {
@@ -132,7 +142,10 @@ class EmbedTargetGeneratorProp : public OperatorProperty {
   }
 
   std::vector<std::string> ListOutputs() const override {
-    return {"output"};
+    if (param_.compressed_mask)
+        return {"output", "inst"};
+    else
+        return {"output"};
   }
 
   Operator* CreateOperator(Context ctx) const override;

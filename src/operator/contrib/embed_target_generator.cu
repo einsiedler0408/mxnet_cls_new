@@ -97,6 +97,44 @@ __global__ void EmbedTargetGeneratorForward(const int n,
   }
 }
 
+template <typename DType>
+__global__ void EmbedTargetCompressedGeneratorForward(const int n,
+                                      const DType* mask, const int neighborhood_grid_width, const int neighborhood_grid_radius, 
+                                      const int stride2, const int mask_num, const int spatial_dim, const int height, const int width, 
+                                      DType* output_label, DType* output_insts) {
+  CUDA_KERNEL_LOOP(index, n) { 
+    const int ni = index / spatial_dim;
+    const int s  = index % spatial_dim;
+    const int nh = ni / neighborhood_grid_width;
+    const int nw = ni % neighborhood_grid_width;
+	const int h = s / width;
+    const int w = s % width;
+    
+    const int offset_h = h + (nh - neighborhood_grid_radius) * stride2;
+    const int offset_w = w + (nw - neighborhood_grid_radius) * stride2;
+    
+    output_label[index] = 1;
+    
+    if (offset_h < 0 || offset_h > height - 1 || offset_w < 0 || offset_w > width - 1) {
+        continue;
+    }
+    
+    int center_label = int(mask[(h * width + w)]);
+    int input_label  = int(mask[(offset_h * width + offset_w)]);
+            
+    if (center_label > 0) {
+        if (input_label >= 0 && input_label != center_label) {
+            output_label[index] = 0;
+            output_insts[index] = center_label;
+        }   
+        if (input_label >= 0 && input_label == center_label) {
+            output_label[index] = 1;
+            output_insts[index] = center_label;
+        }
+    }
+  }
+}
+
 }  // namespace embed_target_generator
 }  // namespace cuda
 }  // namespace mshadow
@@ -133,13 +171,23 @@ class EmbedTargetGeneratorGPUOp : public Operator{
     index_t neighborhood_grid_radius = param_.max_displacement / param_.stride2;
     index_t neighborhood_grid_width = neighborhood_grid_radius * 2 + 1;
 
-    index_t num_kernels = neighborhood_grid_width * neighborhood_grid_width * height * width;    
-    EmbedTargetGeneratorForward // NOLINT_NEXT_LINE(whitespace/operators)
-          <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
-          (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius, param_.stride2,
-           mask_num, height*width, height, width, output.dptr_);
-    MSHADOW_CUDA_POST_KERNEL_CHECK(EmbedTargetGeneratorForward);
-
+    if (param_.compressed_mask) {
+        Tensor<xpu, 4, DType> insts = out_data[embedTargetGenerator::kInst].get<xpu, 4, DType>(s);
+        
+        index_t num_kernels = neighborhood_grid_width * neighborhood_grid_width * height * width;    
+        EmbedTargetCompressedGeneratorForward // NOLINT_NEXT_LINE(whitespace/operators)
+            <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
+            (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius, param_.stride2,
+            mask_num, height*width, height, width, output.dptr_, insts.dptr_);
+        MSHADOW_CUDA_POST_KERNEL_CHECK(EmbedTargetGeneratorForward);
+    } else {
+        index_t num_kernels = neighborhood_grid_width * neighborhood_grid_width * height * width;    
+        EmbedTargetGeneratorForward // NOLINT_NEXT_LINE(whitespace/operators)
+            <<<cuda_get_num_blocks(num_kernels), mshadow::cuda::kBaseThreadNum, 0, mshadow::Stream<gpu>::GetStream(s)>>>
+            (num_kernels, mask.dptr_, neighborhood_grid_width, neighborhood_grid_radius, param_.stride2,
+            mask_num, height*width, height, width, output.dptr_);
+        MSHADOW_CUDA_POST_KERNEL_CHECK(EmbedTargetGeneratorForward);
+    }
   }
 
   virtual void Backward(const OpContext &ctx,
