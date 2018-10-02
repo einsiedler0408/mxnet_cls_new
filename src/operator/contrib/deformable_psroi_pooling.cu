@@ -264,6 +264,11 @@ namespace cuda {
       // Compute w and h at bottom
       DType bin_size_h = roi_height / static_cast<DType>(pooled_height);
       DType bin_size_w = roi_width / static_cast<DType>(pooled_width);
+      
+      if (left_top_alignment) {
+          roi_start_w += bin_size_w / 2;
+          roi_start_h += bin_size_h / 2;
+      }
 
       DType sub_bin_size_h = bin_size_h / static_cast<DType>(sample_per_part);
       DType sub_bin_size_w = bin_size_w / static_cast<DType>(sample_per_part);
