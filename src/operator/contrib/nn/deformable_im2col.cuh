@@ -429,15 +429,15 @@ __global__ void deformable_col2im_coord_gpu_kernel(const int n, const DType* dat
   const int stride_h, const int stride_w,
   const int dilation_h, const int dilation_w,
   const int channel_per_deformable_group,
-  const int batch_size, const int deformable_group,
+  const int batch_size, const int offset_channels, const int deformable_group,
   const int height_col, const int width_col,
   DType* grad_offset, OpReqType req) {
   CUDA_KERNEL_LOOP(index, n) {
     DType val = 0;
     int w = index % width_col;
     int h = (index / width_col) % height_col;
-    int c = (index / width_col / height_col) % channels;
-    int b = (index / width_col / height_col) / channels;
+    int c = (index / width_col / height_col) % offset_channels;
+    int b = (index / width_col / height_col) / offset_channels;
     // compute the start and end of the output
 
     const int deformable_group_index = c / (2 * kernel_h * kernel_w);
@@ -518,8 +518,8 @@ inline void deformable_col2im_coord(mshadow::Stream<gpu>* s,
         num_kernels, data_col, data_im, data_offset, im_shape[1], im_shape[2], im_shape[3],
         kernel_shape[0], kernel_shape[1], pad[0], pad[1], stride[0], stride[1],
         dilation[0], dilation[1], channel_per_deformable_group,
-        col_shape[1], deformable_group, col_shape[2], col_shape[3], grad_offset, req);
-    MSHADOW_CUDA_POST_KERNEL_CHECK(deformable_col2im_gpu_kernel);
+        col_shape[1], 2 * kernel_shape[0] * kernel_shape[1] * deformable_group, deformable_group, col_shape[2], col_shape[3], grad_offset, req);
+    MSHADOW_CUDA_POST_KERNEL_CHECK(deformable_col2im_coord_gpu_kernel);
     break;
   default:
     LOG(FATAL) << "col2im_nd_gpu does not support computation with "
