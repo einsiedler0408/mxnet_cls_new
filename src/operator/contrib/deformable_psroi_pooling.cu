@@ -140,7 +140,12 @@ namespace cuda {
       DType hstart = static_cast<DType>(ph) * bin_size_h
         + roi_start_h;
       hstart += trans_y * roi_height;
-
+      
+      if (left_top_alignment) {
+          wstart += sub_bin_size_w*0.5 - 0.5;
+          hstart += sub_bin_size_h*0.5 - 0.5;
+      }
+      
       DType sum = 0;
       int count = 0;
       int gw = floor(static_cast<DType>(pw) * group_size / pooled_width);
@@ -287,6 +292,11 @@ namespace cuda {
         + roi_start_h;
       hstart += trans_y * roi_height;
 
+      if (left_top_alignment) {
+          wstart += sub_bin_size_w*0.5 - 0.5;
+          hstart += sub_bin_size_h*0.5 - 0.5;
+      }
+      
       if (top_count[index] <= 0) {
         continue;
       }
