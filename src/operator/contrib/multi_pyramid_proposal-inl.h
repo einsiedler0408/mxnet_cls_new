@@ -61,6 +61,7 @@ struct MultiPyramidProposalParam : public dmlc::Parameter<MultiPyramidProposalPa
   nnvm::Tuple<int> feature_stride;
   bool output_score;
   bool iou_loss;
+  bool left_top_alignment;
   DMLC_DECLARE_PARAMETER(MultiPyramidProposalParam) {
     float tmp[] = {0, 0, 0, 0};
     int tmp_int[] = {0, 0, 0, 0, 0};
@@ -87,6 +88,8 @@ struct MultiPyramidProposalParam : public dmlc::Parameter<MultiPyramidProposalPa
     .describe("Add score to outputs");
     DMLC_DECLARE_FIELD(iou_loss).set_default(false)
     .describe("Usage of IoU Loss");
+    DMLC_DECLARE_FIELD(left_top_alignment).set_default(false)
+    .describe("left_top_alignment");
   }
 };
 
