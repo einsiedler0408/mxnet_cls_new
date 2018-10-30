@@ -85,6 +85,7 @@ namespace cuda {
     const int num_classes,
     const int channels_each_class,
     const bool left_top_alignment,
+    const bool restricted_trans,
     DType* top_data,
     DType* top_count) {
     CUDA_KERNEL_LOOP(index, count) {
@@ -162,6 +163,11 @@ namespace cuda {
           if (w<-0.5 || w>width - 0.5 || h<-0.5 || h>height - 0.5) {
             continue;
           }
+          if (restricted_trans) {
+            if (w<roi_start_w-0.5|| w>roi_end_w+0.5 || h<roi_start_h-0.5 || h>roi_end_h+0.5) {
+                continue;
+            }
+          }
           w = min(max(w, 0.), width - 1.);
           h = min(max(h, 0.), height - 1.);
           int c = (ctop*group_size + gh)*group_size + gw;
@@ -189,7 +195,8 @@ namespace cuda {
     const int part_size,
     const int sample_per_part,
     const float trans_std,
-    const bool left_top_alignment) {
+    const bool left_top_alignment,
+    const bool restricted_trans) {
     // LOG(INFO) << "DeformablePSROIPoolForward";
     const DType *bottom_data = data.dptr_;
     const DType *bottom_rois = bbox.dptr_;
@@ -210,7 +217,7 @@ namespace cuda {
       kBaseThreadNum, 0, stream >> >(
       count, bottom_data, spatial_scale, channels, height, width, pooled_height, pooled_width,
       bottom_rois, bottom_trans, no_trans, trans_std, sample_per_part, output_dim,
-      group_size, part_size, num_classes, channels_each_class, left_top_alignment, top_data, top_count_data);
+      group_size, part_size, num_classes, channels_each_class, left_top_alignment, restricted_trans, top_data, top_count_data);
     DeformablePSROIPOOLING_CUDA_CHECK(cudaPeekAtLastError());
   }
 
@@ -237,7 +244,8 @@ namespace cuda {
     const int part_size,
     const int num_classes,
     const int channels_each_class,
-    const bool left_top_alignment) {
+    const bool left_top_alignment,
+    const bool restricted_trans) {
     CUDA_KERNEL_LOOP(index, count) {
       // The output is in order (n, ctop, ph, pw)
       int pw = index % pooled_width;
@@ -316,6 +324,11 @@ namespace cuda {
           if (w<-0.5 || w>width - 0.5 || h<-0.5 || h>height - 0.5) {
             continue;
           }
+          if (restricted_trans) {
+            if (w<roi_start_w-0.5|| w>roi_end_w+0.5 || h<roi_start_h-0.5 || h>roi_end_h+0.5) {
+                continue;
+            }
+          }
           w = min(max(w, 0.), width - 1.);
           h = min(max(h, 0.), height - 1.);
           int c = (ctop*group_size + gh)*group_size + gw;
@@ -377,7 +390,8 @@ namespace cuda {
     const int part_size,
     const int sample_per_part,
     const float trans_std,
-    const bool left_top_alignment) {
+    const bool left_top_alignment,
+    const bool restricted_trans) {
     // LOG(INFO) << "DeformablePSROIPoolBackward";
     const DType *top_diff = out_grad.dptr_;
     const DType *bottom_data = data.dptr_;
@@ -402,7 +416,7 @@ namespace cuda {
       count, top_diff, top_count_data, num_rois, spatial_scale, channels, height, width,
       pooled_height, pooled_width, output_dim, bottom_data_diff, bottom_trans_diff,
       bottom_data, bottom_rois, bottom_trans, no_trans, trans_std, sample_per_part,
-      group_size, part_size, num_classes, channels_each_class, left_top_alignment);
+      group_size, part_size, num_classes, channels_each_class, left_top_alignment, restricted_trans);
     DeformablePSROIPOOLING_CUDA_CHECK(cudaPeekAtLastError());
   }
 
@@ -422,9 +436,10 @@ namespace cuda {
     const int part_size,
     const int sample_per_part,
     const float trans_std,
-    const bool left_top_alignment) {
+    const bool left_top_alignment,
+    const bool restricted_trans) {
     cuda::DeformablePSROIPoolForward(out, data, bbox, trans, top_count, no_trans, spatial_scale,
-      output_dim, group_size, pooled_size, part_size, sample_per_part, trans_std, left_top_alignment);
+      output_dim, group_size, pooled_size, part_size, sample_per_part, trans_std, left_top_alignment, restricted_trans);
   }
 
   template<typename DType>
@@ -443,10 +458,11 @@ namespace cuda {
     const int part_size,
     const int sample_per_part,
     const float trans_std,
-    const bool left_top_alignment) {
+    const bool left_top_alignment,
+    const bool restricted_trans) {
     cuda::DeformablePSROIPoolBackwardAcc(in_grad, trans_grad, out_grad, data, bbox, trans,
       top_count, no_trans, spatial_scale, output_dim, group_size, pooled_size, part_size,
-      sample_per_part, trans_std, left_top_alignment);
+      sample_per_part, trans_std, left_top_alignment, restricted_trans);
   }
 
 }  // namespace mshadow
